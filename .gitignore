@@ -1,0 +1,25 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Conda environments
+/env/
+/venv/
+/.venv/
+/conda-env/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints
+
+# VSCode settings
+.vscode/
+
+# Data files - IMPORTANT!
+data/
+*.grib
+*.nc
+
+# Log files
+slurm_logs/
+*.log

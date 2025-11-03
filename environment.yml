@@ -1,0 +1,26 @@
+name: aurora_mjo
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  # Core ML Libraries
+  - pytorch::pytorch
+  - pytorch::torchvision
+  - pytorch::torchaudio
+  # The model itself
+  - pip:
+    - microsoft-aurora
+  # Data handling and analysis
+  - numpy
+  - pandas
+  - xarray
+  - cfgrib  # For reading ERA5 GRIB files
+  - cdsapi  # For downloading data from Copernicus
+  # Plotting and notebooks
+  - matplotlib
+  - jupyterlab
+  # Code quality
+  - pre-commit
