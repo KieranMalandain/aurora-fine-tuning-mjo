@@ -17,6 +17,10 @@ dependencies:
   - numpy
   - pandas
   - xarray
+  - dask
+  - bottleneck
+  - netcdf4
+  - h5netcdf
   - cfgrib  # For reading ERA5 GRIB files
   - cdsapi  # For downloading data from Copernicus
   # Plotting and notebooks

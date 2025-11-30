@@ -23,3 +23,4 @@ data/
 # Log files
 slurm_logs/
 *.log
+experiment_outputs/
