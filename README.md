@@ -1,4 +1,3 @@
-```markdown
 # 🌍 Fine-Tuning Aurora for MJO Prediction
 
 [![Python](https://img.shields.io/badge/Python-3.10-3776AB?logo=python&style=flat-square)](https://www.python.org/)
@@ -71,7 +70,8 @@ This work is conducted at **Yale University** as part of the **Lu Research Group
 *   Conda / Mamba
 
 ### Installation
-```bash
+
+```
 # 1. Clone the repository
 git clone git@github.com:KieranMalandain/aurora-fine-tuning-mjo.git
 cd aurora-fine-tuning-mjo
@@ -82,7 +82,8 @@ conda activate aurora_mjo
 ```
 
 ### Running the Pipeline
-```bash
+
+```
 # 1. Download ERA5 Data (requires CDS API key)
 python scripts/larger_download_era5_sample.py
 
@@ -101,4 +102,3 @@ sbatch slurm_scripts/investigate_finetuning.slurm
 ---
 
 *Last Updated: January 2026*
-```
