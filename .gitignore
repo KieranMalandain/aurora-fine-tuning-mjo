@@ -24,3 +24,11 @@ data/
 slurm_logs/
 *.log
 experiment_outputs/
+
+# Other
+
+Result_02/
+*.npz
+*.pth
+scripts/vit_investigation/
+scripts/vit_scripts/
