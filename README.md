@@ -16,7 +16,7 @@ The **Madden-Julian Oscillation (MJO)** is the dominant mode of intra-seasonal v
 This project investigates the efficacy of **Foundation Models** for this task. Unlike traditional statistical approaches that regress on anomalies, we treat MJO forecasting as a **physics-consistent initial value problem**. By fine-tuning **Microsoft Aurora**—a 3D Swin Transformer pre-trained on petabytes of atmospheric data—we aim to extend skillful MJO prediction out to 30+ days.
 
 ### Key Objectives
-1.  **Engineering:** Build a robust HPC pipeline to fine-tune billion-parameter models on the Yale Grace Cluster using A100 GPUs.
+1.  **Engineering:** Build a robust HPC pipeline to fine-tune billion-parameter models on the Yale Bouchet Cluster using H200 GPUs.
 2.  **Methodology:** Pivot from statistical emulation (anomaly mapping) to prognostic simulation (raw physical state stepping).
 3.  **Performance:** Achieve an RMM Index correlation of $r > 0.5$ at a 30-day lead time.
 
@@ -27,7 +27,7 @@ This project investigates the efficacy of **Foundation Models** for this task. U
 We utilize a two-stage fine-tuning approach (Full-Model Adaptation followed by **LoRA** Rollouts) to adapt Aurora to the specific dynamics of the tropics.
 
 ### The "Physics-First" Data Strategy
-We identified that Foundation Models require absolute physical consistency. We engineered a pipeline to ingest raw **ERA5 Reanalysis** data (0.25° Global, 6-hourly), extending the model's embedding space to include MJO-critical variables:
+We identified that Foundation Models require absolute physical consistency. We engineered a pipeline to ingest raw **ERA5 Reanalysis** data (1° Global, 6-hourly, upsampled to 0.25°), extending the model's embedding space to include MJO-critical variables:
 *   **Outgoing Longwave Radiation (OLR):** A proxy for tropical convection.
 *   **Total Column Water Vapor (TCWV):** Capturing "moisture mode" dynamics.
 
@@ -66,24 +66,26 @@ This work is conducted at **Yale University** as part of the **Lu Research Group
 ## 🚀 Getting Started
 
 ### Prerequisites
-*   Access to a SLURM-based HPC (e.g., Yale Grace) with NVIDIA A100 GPUs.
+*   Access to a SLURM-based HPC (e.g., Yale Bouchet) with NVIDIA GPUs (e.g., A100, H200).
 *   Conda / Mamba
 
 ### Installation
 
-```
+```bash
 # 1. Clone the repository
 git clone git@github.com:KieranMalandain/aurora-fine-tuning-mjo.git
 cd aurora-fine-tuning-mjo
 
 # 2. Create the environment (includes PyTorch, Aurora, Xarray)
+# note cuda version is set to 12.8 by default. 
+# change `environment.yml` if you need a different version.
 mamba env create -f environment.yml
 conda activate aurora_mjo
 ```
 
 ### Running the Pipeline
 
-```
+```bash
 # 1. Download ERA5 Data (requires CDS API key)
 python scripts/larger_download_era5_sample.py
 
@@ -93,7 +95,7 @@ sbatch slurm_scripts/investigate_finetuning.slurm
 
 ---
 
-## 📄 References & Papers
+## 📄 Main References & Papers
 
 *   **Project Paper:** [Find here](docs/papers/aurora-mjo-fall-paper.pdf)---as of December 2025
 *   **Aurora:** Bodnar et al., *"Aurora: A Foundation Model for the Earth System"* (arXiv:2405.13063)
@@ -101,4 +103,4 @@ sbatch slurm_scripts/investigate_finetuning.slurm
 
 ---
 
-*Last Updated: January 2026*
+*Last Updated: March 2026*

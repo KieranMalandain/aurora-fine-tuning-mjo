@@ -16,7 +16,6 @@ __pycache__/
 .vscode/
 
 # Data files - IMPORTANT!
-data/
 *.grib
 *.nc
 
@@ -25,10 +24,8 @@ slurm_logs/
 *.log
 experiment_outputs/
 
-# Other
+# Legacy
+investigation_phase1/
 
-Result_02/
-*.npz
-*.pth
-scripts/vit_investigation/
-scripts/vit_scripts/
+# Other
+documentation.md

@@ -3,17 +3,16 @@ channels:
   - pytorch
   - nvidia
   - conda-forge
+  - nodefaults
 dependencies:
   - python=3.10
   - pip
-  # Core ML Libraries
+  
   - pytorch::pytorch
   - pytorch::torchvision
   - pytorch::torchaudio
-  # The model itself
-  - pip:
-    - microsoft-aurora
-  # Data handling and analysis
+  - pytorch::pytorch-cuda=12.8 # bouchet cuda version
+
   - numpy
   - pandas
   - xarray
@@ -21,10 +20,12 @@ dependencies:
   - bottleneck
   - netcdf4
   - h5netcdf
-  - cfgrib  # For reading ERA5 GRIB files
-  - cdsapi  # For downloading data from Copernicus
-  # Plotting and notebooks
+  - cfgrib  
+  - cdsapi  
+
   - matplotlib
   - jupyterlab
-  # Code quality
   - pre-commit
+
+  - pip:
+    - microsoft-aurora
