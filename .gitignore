@@ -29,5 +29,12 @@ experiment_outputs/
 # Legacy
 investigation_phase1/
 
-# Other
-documentation.md
+# Agent Tools
+.agent/
+GEMINI.md
+AGENTS.md
+
+docs/*
+!docs/images/
+!docs/papers/
+!docs/documentation.md

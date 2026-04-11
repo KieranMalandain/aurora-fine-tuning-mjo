@@ -1,180 +1,177 @@
+# src/dataset.py
 import torch
+import torch.nn.functional as F
 import xarray as xr
 import numpy as np
 from torch.utils.data import Dataset
-import torch.nn.functional as F
 from pathlib import Path
 from aurora import Batch, Metadata
 
-# variable mappings
-# note: add in evap and precip later for pi-training
+# --- LANL DATA CONFIGURATION ---
+# Base directory on NERSC Perlmutter
+LANL_DIR = Path("/global/cfs/cdirs/m4946/xiaoming/zm4946.MachLearn/PrcsPrep/prcs.ERA5/prcs.ERA5.Remap/Results")
 
+# Required Aurora Pressure Levels (hPa)
+AURORA_PLEVS =[50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 850, 925, 1000]
+
+# Mapping: {Aurora_Name: (LANL_Step_Folder, LANL_Variable_Name)}
 SURFACE_VAR_MAP = {
-    't2': '2t',          # LANL name -> Aurora name
-    'u10': '10u',
-    'v10': '10v',
-    'Ps': 'msl',         # using surface pressure for MSL (confirm w group)
-    'mtnlwrf': 'ttr',    # LANL name for OLR
-    'tcwv': 'tcwv',
-    # 'EFLX': 'evap',       # Evaporation
-    # 'tp6h': 'precip',      # Total Precipitation
+    '2t':   ('Step02/ERA5.remap_180x360MODIS_6hrInst/T2', 't2*'), # Note: xarray will load actual var name, e.g., t2m
+    '10u':  ('Step02/ERA5.remap_180x360MODIS_6hrInst/U10', 'u10*'),
+    '10v':  ('Step02/ERA5.remap_180x360MODIS_6hrInst/V10', 'v10*'),
+    'msl':  ('Step02/ERA5.remap_180x360MODIS_6hrInst/PS', 'Ps'),  # Using Surface Pressure as MSL proxy
+    'ttr':  ('Step03/ERA5.remap_180x360MODIS_6hrInst/meanTNLWFLX', 'mtnlwrf'), # OLR in W/m^2
+    'tcwv': ('Step02/ERA5.remap_180x360MODIS_6hrInst/tcwv', 'tcwv'),
+    # 'evap': ('Step02/ERA5.remap_180x360MODIS_6hrInst/EFLX', 'EFLX'), # For Phase 2 Physics Loss
+    # 'precip': ('Step06/ERA5.remap_180x360MODIS_6hrAccu/TP6H', 'tp6h'), # For Phase 2 Physics Loss
 }
 
 ATMOS_VAR_MAP = {
-    'z': 'z',
-    'u': 'u',
-    'v': 'v',
-    't': 't',
-    'q': 'q',
+    'z': ('Step01/ERA5.remap_180x360MODIS_6hrInst/gopt', 'z*'),
+    'q': ('Step01/ERA5.remap_180x360MODIS_6hrInst/sphu', 'q*'),
+    't': ('Step01/ERA5.remap_180x360MODIS_6hrInst/tprt', 't*'),
+    'u': ('Step01/ERA5.remap_180x360MODIS_6hrInst/uWnd', 'u*'),
+    'v': ('Step01/ERA5.remap_180x360MODIS_6hrInst/vWnd', 'v*'),
 }
 
-def load_and_combine_files(file_list, engine='netcdf4'):
-    """
-    Loads a list of NetCDF files and handles common issues.
-    """
-    print(f"Lazy loading {len(file_list)} files using engine='{engine}'...")
-
-    try:
-        ds = xr.open_mfdataset(
-            file_list,
-            engine=engine,
-            combine='by_coords',
-            parallel=False,
-            chunks={'valid_time': 1}
-        )
-        if 'valid_time' in ds.dims:
-            ds = ds.rename({'valid_time': 'time'})
+class LANLMJODataset(Dataset):
+    def __init__(self, start_year, end_year, root_dir=LANL_DIR):
+        """
+        Dataloader engineered for the 1-degree NERSC LANL dataset.
+        Handles on-the-fly upsampling to Aurora's native 0.25-degree resolution.
+        """
+        self.root_dir = Path(root_dir)
+        self.start_year = start_year
+        self.end_year = end_year
         
-        ds = ds.sortby('time')
-
-        if 'latitude' in ds.dims and ds.dims['latitude'] == 721:
-            print("    -> Trimming latitude from 721 to 720 points")
-            ds = ds.isel(latittude=slice(0,720))
-
-        return ds
-    except Exception as e:
-        print(f"CRITICAL ERROR opening dataset: {e}")
-        raise e
-
-class MJODataset(Dataset):
-    def __init__(self, surface_ds, pressure_ds, static_file_path):
-        """
-        Args:
-            surface_ds (xr.Dataset): Time-sliced surface data
-            pressure_ds (xr.Dataset): Time-sliced atmospheric data
-            static_file_path (str or Path): Path to static.nc data file
-        """
-        self.surface_ds = surface_ds
-        self.pressure_ds = pressure_ds
-        self.static_vars = self._load_static_vars(static_file_path)
-
+        print(f"Initializing LANL MJO Dataset ({start_year}-{end_year})...")
+        
+        # 1. Load Static Variables
+        self.static_vars = self._load_static_vars()
+        
+        # 2. Lazy Load Dynamic Datasets
+        # In a full production script, we would glob the files for the specific years.
+        # For simplicity here, we assume a unified loader function exists.
+        self.surface_ds = self._build_virtual_dataset(SURFACE_VAR_MAP)
+        self.pressure_ds = self._build_virtual_dataset(ATMOS_VAR_MAP)
+        
+        # 3. Filter Pressure Levels to the exact 13 Aurora requires
+        # LANL data has 29 levels. We must slice them.
+        plev_coord = 'isobaricInhPa' if 'isobaricInhPa' in self.pressure_ds.coords else 'level'
+        self.pressure_ds = self.pressure_ds.sel({plev_coord: AURORA_PLEVS})
+        self.atmos_levels = tuple(AURORA_PLEVS)
+        
         self.num_samples = len(self.surface_ds['time']) - 2
-        self.lat = torch.from_numpy(surface_ds['latitude'].values)
-        self.lon = torch.from_numpy(surface_ds['longitude'].values)
 
-        if 'pressure_level' in pressure_ds.coords:
-            p_levels = pressure_ds['pressure_level'].values
-        elif 'isobaricInhPa' in pressure_ds.coords:
-            p_levels = pressure_ds['isobaricInhPa'].values
-        else:
-            raise ValueError("Could not find pressure level coordinate in the dataset.")
-        
-        self.atmos_levels = tuple(int(l) for l in p_levels)
-    
-    def _load_static_vars(self, path):
-        """Helper to load static variables."""
-        ds = xr.open_dataset(path, engine='netcdf4')
+        # Aurora requires latitude/longitude in 0.25 deg format
+        # Since we upsample the data, we must provide the UPSAMPLED coordinates to the Metadata
+        self.lat = torch.linspace(90, -90, 720)
+        self.lon = torch.linspace(0, 360, 1441)[:-1]
 
-        if 'latitude' in ds.dims and ds.dims['latitude'] == 721:
-            ds = ds.isel(latitude=slice(0,720))
+    def _load_static_vars(self):
+        """Loads Z and LSM, and creates a dummy SLT (Soil Type) to prevent Aurora crashes."""
+        # Note: Actual file paths will need to be globbed based on the Step00 directory
+        static_dir = self.root_dir / "Step00/ERA5.invariant"
         
-        if 'time' in ds.dims:
-            z = ds['z'].isel(time=0).values
-            lsm = ds['lsm'].isel(time=0).values
-            slt = ds['slt'].isel(time=0).values
-        else:
-            z = ds['z'].values
-            lsm = ds['lsm'].values
-            slt = ds['slt'].values
+        # NOTE FOR AGENT: Implement actual globbing here for the specific static files.
+        # For now, we simulate the logic.
+        try:
+            z_file = list(static_dir.glob("*_z.*.nc"))[0]
+            lsm_file = list(static_dir.glob("*_lsm.*.nc"))[0]
+            z_arr = xr.open_dataset(z_file)['z'].values
+            lsm_arr = xr.open_dataset(lsm_file)['lsm'].values
+        except IndexError:
+            # Fallback for testing if files aren't found immediately
+            z_arr = np.zeros((180, 360))
+            lsm_arr = np.zeros((180, 360))
+            
+        z_tensor = self._upsample_to_aurora(torch.from_numpy(z_arr).float())
+        lsm_tensor = self._upsample_to_aurora(torch.from_numpy(lsm_arr).float())
         
-        return {
-            'z': torch.nan_to_num(torch.from_numpy(z).float().squeeze()),
-            'lsm': torch.nan_to_num(torch.from_numpy(lsm).float().squeeze()),
-            'slt': torch.nan_to_num(torch.from_numpy(slt).float().squeeze()),
-        }
-    
+        # Soil Type (slt) is missing from the LANL PDF. 
+        # We create a dummy tensor of zeros so Aurora doesn't crash.
+        slt_tensor = torch.zeros_like(z_tensor)
+        
+        return {"z": z_tensor, "lsm": lsm_tensor, "slt": slt_tensor}
+
+    def _build_virtual_dataset(self, var_map):
+        """
+        NOTE FOR AGENT: This is a placeholder for the actual xarray merging logic.
+        The agent should expand this to glob files from the respective StepXX directories
+        based on `self.start_year` and `self.end_year`, and xr.merge() them.
+        """
+        # Placeholder return for structural purposes
+        return xr.Dataset() 
+
+    def _upsample_to_aurora(self, tensor):
+        """
+        CRITICAL: Upsamples 1-degree LANL data (180x360) to 0.25-degree Aurora data (720x1440).
+        Tensor shape expected: (Lat, Lon) or (Time, Levels, Lat, Lon)
+        """
+        original_shape = tensor.shape
+        
+        # Ensure tensor has exactly 4 dimensions (Batch, Channel, Lat, Lon) for interpolation
+        if len(original_shape) == 2:
+            tensor = tensor.unsqueeze(0).unsqueeze(0) # (1, 1, Lat, Lon)
+        elif len(original_shape) == 3:
+            tensor = tensor.unsqueeze(0) # (1, C, Lat, Lon)
+            
+        # Bilinear interpolation up to 720x1440
+        upsampled = F.interpolate(tensor, size=(720, 1440), mode='bilinear', align_corners=False)
+        
+        # Strip the dummy dimensions back to the expected output shape
+        if len(original_shape) == 2:
+            return upsampled.squeeze(0).squeeze(0)
+        elif len(original_shape) == 3:
+            return upsampled.squeeze(0)
+        return upsampled
+
     def __len__(self):
         return self.num_samples
-    
-    def __getitem__(self, idx):
-        input_slice = slice(idx, idx+2)
-        target_slice = slice(idx+2, idx+3)
 
+    def __getitem__(self, idx):
+        input_slice = slice(idx, idx + 2)
+        target_slice = slice(idx + 2, idx + 3)
+        
+        # Lazy Load from Disk
         surf_data = self.surface_ds.isel(time=input_slice).load()
         surf_target = self.surface_ds.isel(time=target_slice).load()
         pres_data = self.pressure_ds.isel(time=input_slice).load()
         pres_target = self.pressure_ds.isel(time=target_slice).load()
 
-        def clean(arr):
-            return torch.nan_to_num(torch.from_numpy(arr.astype(np.float32)))
-        
-        def process_var(name, arr):
+        def process_var(arr):
+            # Clean NaNs and convert to tensor
             tensor = torch.nan_to_num(torch.from_numpy(arr.astype(np.float32)))
-            # Add necessary batch and channel dims for interpolation: (1, 1, 180, 360)
-            tensor = tensor.unsqueeze(0).unsqueeze(0) 
-            # UPSAMPLE TO 0.25 DEGREE (180x360 -> 720x1440)
-            tensor = F.interpolate(tensor, size=(720, 1440), mode='bilinear', align_corners=False)
-            # Remove the dummy channel dim, keep batch dim: (1, 720, 1440)
-            tensor = tensor.squeeze(1)
-            # unit convert
-            if name == 'mtnlwrf':
-                return tensor / 3600.
-            return tensor
+            # Upsample 1-degree to 0.25-degree
+            return self._upsample_to_aurora(tensor)
+
+        # Build Aurora Dictionaries
+        # Note for Agent: Extract actual variable names dynamically based on the dataset keys
+        surf_in = {aurora_k: process_var(surf_data[lanl_k.replace('*','')].values)[None] for aurora_k, (folder, lanl_k) in SURFACE_VAR_MAP.items() if lanl_k.replace('*','') in surf_data}
+        atmos_in = {aurora_k: process_var(pres_data[lanl_k.replace('*','')].values)[None] for aurora_k, (folder, lanl_k) in ATMOS_VAR_MAP.items() if lanl_k.replace('*','') in pres_data}
         
-        
-        surf_tensors = {}
-        for era_name, aurora_name in SURFACE_VAR_MAP.items():
-            if era_name in surf_data:
-                surf_tensors[aurora_name] = process_var(
-                    era_name, surf_data[era_name].values
-                )[None]
-        
-        atmos_tensors = {}
-        for era_name, aurora_name in ATMOS_VAR_MAP.items():
-            if era_name in pres_data:
-                atmos_tensors[aurora_name] = process_var(
-                    era_name, pres_data[era_name].values
-                )[None]
+        surf_out = {aurora_k: process_var(surf_target[lanl_k.replace('*','')].values) for aurora_k, (folder, lanl_k) in SURFACE_VAR_MAP.items() if lanl_k.replace('*','') in surf_target}
+        atmos_out = {aurora_k: process_var(pres_target[lanl_k.replace('*','')].values) for aurora_k, (folder, lanl_k) in ATMOS_VAR_MAP.items() if lanl_k.replace('*','') in pres_target}
+
+        # ADDRESSING THE ADDENDUM: Time Tags
+        # ClimaX loses time tags. Aurora requires them. We explicitly pass the initialization time here.
+        # batch.metadata.time[0] will be the exact initialization time.
+        init_time = surf_data.time.values.astype('datetime64[s]').tolist()[1]
 
         in_batch = Batch(
-            surf_vars = surf_tensors,
-            atmos_vars = atmos_tensors,
-            static_vars = self.static_vars,
-            metadata = Metadata(
-                lat = self.lat,
-                lon = self.lon,
-                time = (surf_data.time.values.astype('datatime64[s]').tolist()[1],),
-                atmos_levels = self.atmos_levels,
-                rollout_step = 0
+            surf_vars=surf_in,
+            atmos_vars=atmos_in,
+            static_vars=self.static_vars,
+            metadata=Metadata(
+                lat=self.lat,
+                lon=self.lon,
+                time=(init_time,), # The crucial Initialization Time Tag
+                atmos_levels=self.atmos_levels,
+                rollout_step=0 
             )
-        )        
+        )
 
-        target_dict = {}
-        for era_name, aurora_name in SURFACE_VAR_MAP.items():
-            if era_name in surf_target:
-                target_dict[aurora_name] = process_var(
-                    era_name, surf_target[era_name].values
-                )
-        for era_name, aurora_name in ATMOS_VAR_MAP.items():
-            if era_name in pres_target:
-                target_dict[aurora_name] = process_var(
-                    era_name, pres_target[era_name].values
-                )
-        
-        return in_batch, target_dict
-    
-    def collate_fn(batch_list):
-        """
-        Collates a list of (batch, target) tuples. We take the first element assuming batch_size=1
-        """
-        return batch_list[0]
+        return in_batch, surf_out, atmos_out
+
+def collate_fn(batch_list):
+    return batch_list[0]

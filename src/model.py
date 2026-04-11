@@ -1,3 +1,4 @@
+# src/model.py
 import torch
 from aurora import Aurora, AuroraSmallPretrained
 from aurora.normalisation import locations, scales
