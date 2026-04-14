@@ -52,18 +52,27 @@ The main non-default variables of interest are:
 
 These variables are treated as critical for convective and moisture-envelope representation.
 
-### Planned MJO Head
+### MJO Head (implemented – scaffold)
 
-The intended next architecture step is an explicit MJO head that predicts:
+An explicit MJO head is implemented in `src/model.py` as `AuroraMJO`.
+The head predicts:
 - RMM1
 - RMM2
-- amplitude
-- active-MJO probability (optional)
+- amplitude (active-MJO probability is deferred to a later phase)
 
-Likely implementation:
-- extract Aurora latent or output features
-- pool over tropical lat-lon region
-- apply lightweight MLP head
+Implementation:
+- A forward hook on `Aurora.encoder` captures the encoder latent `x`
+  of shape `(B, latent_levels × H_patches × W_patches, embed_dim)`.
+- The latent is reshaped to `(B, n_levels, H_patches, W_patches, embed_dim)`
+  and mean-pooled over all lat patches inside the configured tropical band
+  (default ±15°) and all longitudes, yielding `(B, embed_dim)`.
+- A two-layer MLP (LayerNorm → Linear → GELU → Dropout → Linear) maps that
+  to `(B, 3)` → `[RMM1, RMM2, Amplitude]`.
+- The head is controlled by `config['mjo_head']['enabled']` and is off by
+  default, making the model a transparent Aurora wrapper when disabled.
+- The final linear layer is zero-initialized so the head starts neutral.
+- `load_checkpoint(strict=False)` is preserved; the new MLP weights are not
+  present in the pretrained checkpoint and are handled gracefully.
 
 ### LoRA
 
