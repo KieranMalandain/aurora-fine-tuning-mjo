@@ -1,4 +1,10 @@
 # src/dataset.py
+#
+# NERSC/LANL ERA5 dataset for Aurora MJO fine-tuning.
+# All path roots are passed via constructor args or config — nothing is hardcoded here.
+# Use src/dummy_dataset.py for Bouchet smoke tests.
+
+import warnings
 import torch
 import torch.nn.functional as F
 import xarray as xr
@@ -7,23 +13,33 @@ from torch.utils.data import Dataset
 from pathlib import Path
 from aurora import Batch, Metadata
 
-# --- LANL DATA CONFIGURATION ---
-# Base directory on NERSC Perlmutter
-LANL_DIR = Path("/global/cfs/cdirs/m4946/xiaoming/zm4946.MachLearn/PrcsPrep/prcs.ERA5/prcs.ERA5.Remap/Results")
+# DEFAULT_NERSC_ROOT is provided as a fallback hint only.
+# Always override via config['data']['root'] or the root_dir constructor arg.
+_DEFAULT_NERSC_ROOT = "/global/cfs/cdirs/m4946/xiaoming/zm4946.MachLearn/PrcsPrep/prcs.ERA5/prcs.ERA5.Remap/Results"
 
 # Required Aurora Pressure Levels (hPa)
 AURORA_PLEVS =[50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 850, 925, 1000]
 
-# Mapping: {Aurora_Name: (LANL_Step_Folder, LANL_Variable_Name)}
+# Variable maps: {aurora_name: (step_subdir, glob_pattern)}
+#
+# Each entry identifies:
+#   - the StepXX subdirectory under root_dir that holds the files
+#   - the glob pattern used to find per-year .nc files in that directory
+#
+# NOTE — msl proxy: The LANL dataset does not include mean sea-level pressure.
+# 'Ps' (surface pressure) is used as a stand-in for 'msl'.
+# TO REPLACE WITH TRUE MSL: change 'Ps' below to the actual MSL glob pattern
+# once those files are available. No other code change should be required.
 SURFACE_VAR_MAP = {
-    '2t':   ('Step02/ERA5.remap_180x360MODIS_6hrInst/T2', 't2*'), # Note: xarray will load actual var name, e.g., t2m
-    '10u':  ('Step02/ERA5.remap_180x360MODIS_6hrInst/U10', 'u10*'),
-    '10v':  ('Step02/ERA5.remap_180x360MODIS_6hrInst/V10', 'v10*'),
-    'msl':  ('Step02/ERA5.remap_180x360MODIS_6hrInst/PS', 'Ps'),  # Using Surface Pressure as MSL proxy
-    'ttr':  ('Step03/ERA5.remap_180x360MODIS_6hrInst/meanTNLWFLX', 'mtnlwrf'), # OLR in W/m^2
-    'tcwv': ('Step02/ERA5.remap_180x360MODIS_6hrInst/tcwv', 'tcwv'),
-    # 'evap': ('Step02/ERA5.remap_180x360MODIS_6hrInst/EFLX', 'EFLX'), # For Phase 2 Physics Loss
-    # 'precip': ('Step06/ERA5.remap_180x360MODIS_6hrAccu/TP6H', 'tp6h'), # For Phase 2 Physics Loss
+    '2t':   ('Step02/ERA5.remap_180x360MODIS_6hrInst/T2',          't2*'),
+    '10u':  ('Step02/ERA5.remap_180x360MODIS_6hrInst/U10',         'u10*'),
+    '10v':  ('Step02/ERA5.remap_180x360MODIS_6hrInst/V10',         'v10*'),
+    'msl':  ('Step02/ERA5.remap_180x360MODIS_6hrInst/PS',          'Ps*'),   # MSL_PROXY: swap 'Ps*' → real msl glob when available
+    'ttr':  ('Step03/ERA5.remap_180x360MODIS_6hrInst/meanTNLWFLX', 'mtnlwrf*'),  # OLR in W/m²
+    'tcwv': ('Step02/ERA5.remap_180x360MODIS_6hrInst/tcwv',        'tcwv*'),
+    # Phase-2 physics-loss variables (do not enable until baseline is stable):
+    # 'evap':   ('Step02/ERA5.remap_180x360MODIS_6hrInst/EFLX',  'EFLX*'),
+    # 'precip': ('Step06/ERA5.remap_180x360MODIS_6hrAccu/TP6H',  'tp6h*'),
 }
 
 ATMOS_VAR_MAP = {
@@ -35,11 +51,25 @@ ATMOS_VAR_MAP = {
 }
 
 class LANLMJODataset(Dataset):
-    def __init__(self, start_year, end_year, root_dir=LANL_DIR):
+    def __init__(self, start_year: int, end_year: int, root_dir: str | Path | None = None):
         """
-        Dataloader engineered for the 1-degree NERSC LANL dataset.
+        Dataset for the 1-degree NERSC/LANL ERA5 ERA5 preprocessing output.
         Handles on-the-fly upsampling to Aurora's native 0.25-degree resolution.
+
+        Args:
+            start_year: First year (inclusive) to include in the dataset.
+            end_year:   Last year (inclusive) to include in the dataset.
+            root_dir:   Filesystem root of the LANL Results/ directory.
+                        Pass via config['data']['root'] or the --data-root CLI flag.
+                        Falls back to _DEFAULT_NERSC_ROOT with a warning if omitted.
         """
+        if root_dir is None:
+            warnings.warn(
+                f"root_dir not provided; falling back to default NERSC path: {_DEFAULT_NERSC_ROOT}. "
+                "Pass root_dir explicitly or set config['data']['root'] to suppress this warning.",
+                stacklevel=2,
+            )
+            root_dir = _DEFAULT_NERSC_ROOT
         self.root_dir = Path(root_dir)
         self.start_year = start_year
         self.end_year = end_year
@@ -49,9 +79,7 @@ class LANLMJODataset(Dataset):
         # 1. Load Static Variables
         self.static_vars = self._load_static_vars()
         
-        # 2. Lazy Load Dynamic Datasets
-        # In a full production script, we would glob the files for the specific years.
-        # For simplicity here, we assume a unified loader function exists.
+        # 2. Lazy-load dynamic datasets by globbing files per variable and year.
         self.surface_ds = self._build_virtual_dataset(SURFACE_VAR_MAP)
         self.pressure_ds = self._build_virtual_dataset(ATMOS_VAR_MAP)
         
@@ -94,14 +122,78 @@ class LANLMJODataset(Dataset):
         
         return {"z": z_tensor, "lsm": lsm_tensor, "slt": slt_tensor}
 
-    def _build_virtual_dataset(self, var_map):
+    def _build_virtual_dataset(self, var_map: dict) -> xr.Dataset:
         """
-        NOTE FOR AGENT: This is a placeholder for the actual xarray merging logic.
-        The agent should expand this to glob files from the respective StepXX directories
-        based on `self.start_year` and `self.end_year`, and xr.merge() them.
+        Glob files for every variable in `var_map` across the requested year
+        range and merge them into a single xr.Dataset aligned on the 'time'
+        dimension.
+
+        Directory layout assumed under self.root_dir:
+            <root_dir>/<step_subdir>/<year>/<glob_pattern>.nc
+        e.g.:
+            Results/Step02/ERA5.remap_180x360MODIS_6hrInst/T2/2000/t2_2000*.nc
+
+        If a variable's files are absent on this host the variable is silently
+        skipped with a warning so that other variables can still load.
+
+        Returns:
+            xr.Dataset with one data variable per aurora variable name, merged
+            along the 'time' axis and sliced to [start_year, end_year].
         """
-        # Placeholder return for structural purposes
-        return xr.Dataset() 
+        per_var_datasets: list[xr.Dataset] = []
+
+        for aurora_name, (step_subdir, glob_pattern) in var_map.items():
+            var_dir = self.root_dir / step_subdir
+
+            # Collect files year-by-year so we stay within the requested range.
+            files: list[Path] = []
+            for year in range(self.start_year, self.end_year + 1):
+                year_dir = var_dir / str(year)
+                matched = sorted(year_dir.glob(glob_pattern + ".nc"))
+                if not matched:
+                    # Some datasets store files directly in the var dir without
+                    # a year sub-directory — try that layout as a fallback.
+                    matched = sorted(var_dir.glob(f"*{year}*" + ".nc"))
+                files.extend(matched)
+
+            if not files:
+                warnings.warn(
+                    f"[LANLMJODataset] No files found for aurora variable '{aurora_name}' "
+                    f"in {var_dir} for years {self.start_year}–{self.end_year}. "
+                    "Skipping this variable.",
+                    stacklevel=2,
+                )
+                continue
+
+            # Open all files for this variable as a single time-concatenated dataset.
+            ds_var = xr.open_mfdataset(
+                [str(f) for f in files],
+                combine="by_coords",
+                concat_dim="time",
+                engine="netcdf4",
+                parallel=True,    # dask-parallel open; actual I/O stays lazy
+            )
+
+            # Rename the netCDF variable (whatever LANL called it) to the
+            # canonical Aurora name so __getitem__ can use a uniform key.
+            # We take whichever data variable appears first — each subdirectory
+            # is expected to hold exactly one variable.
+            native_name = next(iter(ds_var.data_vars))
+            if native_name != aurora_name:
+                ds_var = ds_var.rename({native_name: aurora_name})
+
+            per_var_datasets.append(ds_var[[aurora_name]])
+
+        if not per_var_datasets:
+            raise RuntimeError(
+                f"[LANLMJODataset] _build_virtual_dataset found no files at all under "
+                f"{self.root_dir} for years {self.start_year}–{self.end_year}. "
+                "Check root_dir and the LANL directory layout."
+            )
+
+        # Merge all per-variable datasets on their shared time/lat/lon grid.
+        merged = xr.merge(per_var_datasets, join="inner")
+        return merged
 
     def _upsample_to_aurora(self, tensor):
         """
@@ -145,13 +237,29 @@ class LANLMJODataset(Dataset):
             # Upsample 1-degree to 0.25-degree
             return self._upsample_to_aurora(tensor)
 
-        # Build Aurora Dictionaries
-        # Note for Agent: Extract actual variable names dynamically based on the dataset keys
-        surf_in = {aurora_k: process_var(surf_data[lanl_k.replace('*','')].values)[None] for aurora_k, (folder, lanl_k) in SURFACE_VAR_MAP.items() if lanl_k.replace('*','') in surf_data}
-        atmos_in = {aurora_k: process_var(pres_data[lanl_k.replace('*','')].values)[None] for aurora_k, (folder, lanl_k) in ATMOS_VAR_MAP.items() if lanl_k.replace('*','') in pres_data}
-        
-        surf_out = {aurora_k: process_var(surf_target[lanl_k.replace('*','')].values) for aurora_k, (folder, lanl_k) in SURFACE_VAR_MAP.items() if lanl_k.replace('*','') in surf_target}
-        atmos_out = {aurora_k: process_var(pres_target[lanl_k.replace('*','')].values) for aurora_k, (folder, lanl_k) in ATMOS_VAR_MAP.items() if lanl_k.replace('*','') in pres_target}
+        # Build Aurora dictionaries.
+        # Variables are keyed by their canonical Aurora name (set in _build_virtual_dataset
+        # via the rename step), so we look them up directly — no brittle string-replace.
+        surf_in  = {
+            k: process_var(surf_data[k].values)[None]
+            for k in SURFACE_VAR_MAP
+            if k in surf_data
+        }
+        atmos_in = {
+            k: process_var(pres_data[k].values)[None]
+            for k in ATMOS_VAR_MAP
+            if k in pres_data
+        }
+        surf_out  = {
+            k: process_var(surf_target[k].values)
+            for k in SURFACE_VAR_MAP
+            if k in surf_target
+        }
+        atmos_out = {
+            k: process_var(pres_target[k].values)
+            for k in ATMOS_VAR_MAP
+            if k in pres_target
+        }
 
         # ADDRESSING THE ADDENDUM: Time Tags
         # ClimaX loses time tags. Aurora requires them. We explicitly pass the initialization time here.
