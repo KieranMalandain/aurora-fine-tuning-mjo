@@ -1,0 +1,124 @@
+# configs/phase1_baseline.yaml
+# Phase 1 Baseline: single-step supervised training with tropical-weighted grid loss.
+# Do NOT edit defaults here; override from the CLI with --override key=value
+# or create a new config file that inherits this one.
+
+experiment:
+  name: "phase1_baseline"
+  description: "Single-step Aurora fine-tuning with tropical-weighted L1 loss."
+  seed: 42
+
+# ---------------------------------------------------------------------------
+# Data
+# ---------------------------------------------------------------------------
+data:
+  # Toggle between dummy (Yale Bouchet one-month ERA5) and real (NERSC LANL)
+  use_dummy: true
+
+  # Dummy dataset paths (Yale Bouchet)
+  dummy:
+    surface_files: []          # List of glob patterns or absolute paths; fill in locally
+    pressure_files: []
+    static_file: ""
+
+  # Real dataset years (NERSC LANL) -- chronological splits, no leakage
+  real:
+    train_years: [1980, 2015]  # inclusive
+    val_years:   [2016, 2019]
+    test_years:  [2020, 2023]
+
+  batch_size: 1                # Aurora is large; effective BS is controlled via grad_accum_steps
+  num_workers: 2
+  pin_memory: true
+
+# ---------------------------------------------------------------------------
+# Model
+# ---------------------------------------------------------------------------
+model:
+  model_type: "small"          # "small" -> AuroraSmallPretrained, "huge" -> Aurora
+  use_lora: false
+  lora_mode: "single"
+  gradient_checkpointing: false
+
+  # Surface variables injected into Aurora (must match dataset output keys)
+  surface_variables:
+    - "2t"
+    - "10u"
+    - "10v"
+    - "msl"
+    - "ttr"
+    - "tcwv"
+
+  # Normalization statistics for injected variables (ttr, tcwv).
+  # Computed from *training years only*.  Leave empty to skip injection.
+  norm_stats: {}
+  # Example:
+  # norm_stats:
+  #   ttr:  { mean: -220.0, std: 50.0 }
+  #   tcwv: { mean: 25.0,   std: 15.0 }
+
+# ---------------------------------------------------------------------------
+# Losses
+# ---------------------------------------------------------------------------
+loss:
+  # Tropical-weighted grid loss
+  grid:
+    enabled: true
+    tropics_bbox: [-20, 20]
+    tropics_weight: 1.0
+    extratropics_weight: 0.1
+
+  # Spectral loss (NOT recommended in Phase 1 -- see architecture risks)
+  spectral:
+    enabled: false
+    weight: 0.0
+
+  # MJO head L1 loss (requires MJO head in model -- disable until head is wired)
+  mjo_head:
+    enabled: false
+    weight: 0.0
+
+  # Moisture-budget physics loss (Phase 2 only -- do not enable here)
+  moisture_budget:
+    enabled: false
+    weight: 0.0
+
+# ---------------------------------------------------------------------------
+# Optimiser & Scheduler
+# ---------------------------------------------------------------------------
+training:
+  epochs: 10
+  grad_accum_steps: 1          # Multiply effective batch size
+  max_grad_norm: 1.0           # Gradient clipping
+
+  optimizer:
+    name: "adamw"
+    lr: 1.0e-4
+    weight_decay: 1.0e-5
+    betas: [0.9, 0.999]
+
+  scheduler:
+    name: "cosine"             # "cosine" | "constant" | "none"
+    warmup_steps: 100
+    eta_min: 1.0e-6
+
+  # Rollout curriculum (placeholder for Phase 2)
+  rollout:
+    enabled: false
+    start_steps: 1
+    max_steps: 4
+    step_increase_every_n_epochs: 2
+
+# ---------------------------------------------------------------------------
+# Checkpointing & Logging
+# ---------------------------------------------------------------------------
+checkpointing:
+  save_dir: "checkpoints/phase1_baseline"
+  save_every_n_epochs: 1
+  keep_last_n: 3
+
+logging:
+  log_every_n_steps: 10
+  val_every_n_epochs: 1
+  use_wandb: false
+  project: "aurora-mjo"
