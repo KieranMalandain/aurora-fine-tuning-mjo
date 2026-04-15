@@ -15,6 +15,10 @@ data:
   # Toggle between dummy (Yale Bouchet one-month ERA5) and real (NERSC LANL)
   use_dummy: true
 
+  # Filesystem root of the LANL Results/ directory on NERSC.
+  # Passed directly to LANLMJODataset(root_dir=...).  Ignored when use_dummy is true.
+  root: /global/cfs/cdirs/m4946/xiaoming/zm4946.MachLearn/PrcsPrep/prcs.ERA5/prcs.ERA5.Remap/Results
+
   # Dummy dataset paths (Yale Bouchet)
   dummy:
     surface_files: []          # List of glob patterns or absolute paths; fill in locally

@@ -151,7 +151,11 @@ def build_dataloader(cfg: dict, split: str) -> DataLoader:
         else:
             raise ValueError(f"Unknown split: {split!r}")
 
-        dataset = LANLMJODataset(start_year=years[0], end_year=years[1])
+        dataset = LANLMJODataset(
+                    start_year=years[0],
+                    end_year=years[1],
+                    root_dir=data_cfg.get("root"),
+                )
         from src.dataset import collate_fn as collate
 
     loader = DataLoader(
