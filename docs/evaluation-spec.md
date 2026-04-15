@@ -21,8 +21,8 @@ Proposed default:
 - Validation: 2016–2019
 - Test: 2020–2023
 
-[EDIT ME]
-Replace with actual intended years if different.
+These years are confirmed as the defaults used in `compute_rmm.py`.
+Customize via the `TRAIN_YEARS`, `VAL_YEARS`, `TEST_YEARS` constants in that script.
 
 ## Normalization Rules
 
@@ -43,12 +43,14 @@ The evaluation pipeline should:
 3. derive RMM1 and RMM2
 4. compute amplitude and phase
 
-[EDIT ME]
-Specify exact anomaly/climatology/EOF details if already decided:
-- Wheeler-Hendon standard implementation?
-- custom ERA5-based EOF recomputation?
-- fixed training-period EOF basis?
-- seasonal-cycle removal method?
+**Implemented in `scripts/compute_rmm.py` (2026-04-13):**
+- **Protocol:** Wheeler & Hendon (2004) methodology.
+- **Variables:** OLR (`mtnlwrf`), U850, U200 — tropical mean over 15°S–15°N.
+- **Seasonal-cycle removal:** Day-of-year (DOY) climatological mean computed on the training split (1980–2015); subtracted from all splits.
+- **Normalization:** Each anomaly series is divided by its training-period standard deviation before EOF computation.
+- **EOF basis:** Computed from the covariance matrix of the 3-element combined normalized anomaly vector, using only training-split data. The top two eigenvectors (EOF1, EOF2) define the RMM basis.
+- **Projection:** Validation and test anomalies projected onto the frozen training-period EOF basis.
+- **Outputs:** `data/rmm_basis.npz` (frozen basis), `data/rmm_targets.nc` (per-day RMM1, RMM2, amplitude, phase, split label).
 
 ## Primary Metrics
 
@@ -70,8 +72,8 @@ Specify exact anomaly/climatology/EOF details if already decided:
 Default:
 - active if amplitude > 1.0
 
-[EDIT ME]
-If you use a different threshold, specify it.
+The default threshold of 1.0 is used in `compute_rmm.py` (reported in summary output
+and stored in `rmm_targets.nc` global attributes). No change from default.
 
 ## Forecast Horizons
 
@@ -98,7 +100,7 @@ Each evaluation run should produce:
 
 ## Evaluation Pipeline & RMM Protocol
 
-- **`compute_rmm.py` Status:** Currently MISSING / PLACEHOLDER. Needs to be built immediately to generate training targets for the MJO Head.
+- **`compute_rmm.py` Status:** **IMPLEMENTED** (2026-04-13). Generates `data/rmm_basis.npz` and `data/rmm_targets.nc`. Smoke-test available; full run requires NERSC access.
 - **RMM Implementation Rules:** 
   - Must compute Empirical Orthogonal Functions (EOFs) for OLR, U850, and U200.
   - **CRITICAL:** EOFs and climatological means must be computed using *only* the training split (e.g., 1980–2015) to prevent data leakage into the validation/test sets.
