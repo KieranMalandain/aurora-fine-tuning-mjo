@@ -46,3 +46,27 @@ This file tracks all meaningful experiments.
 
 ---
 
+### EXP-20260416-02
+- Objective: LoRA frozen-subnetwork verification — ensure backbone is frozen and only LoRA adapters + new-var embeddings + MJO head train
+- Status: Code complete — not yet run on NERSC
+- Branch: agent-lora-spec
+- Config file: any config with `use_lora: true` and `freeze_backbone: true` (default)
+- Data source: N/A (freezing logic is architecture-only; no training run)
+- Split: N/A
+- Variables: surf: 2t, 10u, 10v, msl, ttr, tcwv; atmos: z, u, v, t, q (13 levels)
+- Model variant: AuroraSmallPretrained; use_lora=true
+- Losses: N/A (infrastructure change only)
+- Rollout horizon: N/A
+- LoRA settings: r=8, alpha=8, mode="single"; adapters on Swin3D qkv and proj
+- Physics loss: disabled
+- Metrics tracked: trainable / total parameter counts at model load time
+- Expected outcome: ~95–99% of params frozen; LoRA + ttr/tcwv embeddings + MJO head trainable
+- Actual outcome: TBD
+- Notes: |
+    - `freeze_backbone()` in `src/model.py`: blanket freeze → unfreeze LoRA → unfreeze new-var patch embeds
+    - `_log_param_counts()` prints per-child audit on every `load_model()` call
+    - Smoke test: `conda run -n aurora_mjo python scripts/smoke_test_freeze.py`
+    - Set `config['freeze_backbone'] = false` to do full fine-tuning (not recommended pre-baseline)
+
+---
+
