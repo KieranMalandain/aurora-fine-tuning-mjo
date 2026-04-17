@@ -1,0 +1,132 @@
+# configs/phase2_rollout.yaml
+# Phase 2 Rollout: autoregressive multi-step training.
+#
+# This config inherits the same model/data/loss settings as phase1_baseline but
+# enables the rollout curriculum.  Do NOT edit phase1_baseline.yaml; override
+# individual keys here instead.
+#
+# Smoke-test command (2-step rollout, dummy data, CPU):
+#   python train.py --config configs/phase2_rollout.yaml
+
+experiment:
+  name: "phase2_rollout"
+  description: >
+    Multi-step autoregressive rollout training starting at T=1 and growing to
+    T=4 across epochs.  Tropical-weighted L1 loss accumulated at every rollout
+    step with uniform weighting (configurable below).
+  seed: 42
+
+# ---------------------------------------------------------------------------
+# Data (same as phase1 by default; switch use_dummy: false on NERSC)
+# ---------------------------------------------------------------------------
+data:
+  use_dummy: true
+
+  root: /global/cfs/cdirs/m4946/xiaoming/zm4946.MachLearn/PrcsPrep/prcs.ERA5/prcs.ERA5.Remap/Results
+
+  dummy:
+    surface_files: []
+    pressure_files: []
+    static_file: ""
+
+  real:
+    train_years: [1980, 2015]
+    val_years:   [2016, 2019]
+    test_years:  [2020, 2023]
+
+  batch_size: 1
+  num_workers: 2
+  pin_memory: true
+
+# ---------------------------------------------------------------------------
+# Model (same as phase1 by default)
+# ---------------------------------------------------------------------------
+model:
+  model_type: "small"
+  use_lora: false
+  lora_mode: "single"
+  gradient_checkpointing: false
+
+  surface_variables:
+    - "2t"
+    - "10u"
+    - "10v"
+    - "msl"
+    - "ttr"
+    - "tcwv"
+
+  norm_stats: {}
+
+  mjo_head:
+    enabled: false
+
+# ---------------------------------------------------------------------------
+# Losses (same as phase1)
+# ---------------------------------------------------------------------------
+loss:
+  grid:
+    enabled: true
+    tropics_bbox: [-20, 20]
+    tropics_weight: 1.0
+    extratropics_weight: 0.1
+
+  spectral:
+    enabled: false
+    weight: 0.0
+
+  mjo_head:
+    enabled: false
+    weight: 0.0
+
+  moisture_budget:
+    enabled: false
+    weight: 0.0
+
+# ---------------------------------------------------------------------------
+# Optimiser & Scheduler
+# ---------------------------------------------------------------------------
+training:
+  epochs: 20
+  grad_accum_steps: 4          # Compensates for small BS under multi-step rollout
+  max_grad_norm: 1.0
+
+  optimizer:
+    name: "adamw"
+    lr: 5.0e-5                 # Lower LR than phase1 for stability under rollout
+    weight_decay: 1.0e-5
+    betas: [0.9, 0.999]
+
+  scheduler:
+    name: "cosine"
+    warmup_steps: 200
+    eta_min: 1.0e-6
+
+  # ---------------------------------------------------------------------------
+  # Rollout curriculum
+  # ---------------------------------------------------------------------------
+  rollout:
+    enabled: true
+    # Horizon starts at start_steps and grows by 1 every step_increase_every_n_epochs,
+    # capped at max_steps.
+    start_steps: 1
+    max_steps: 4
+    step_increase_every_n_epochs: 2
+
+    # Per-step loss weighting strategy:
+    #   "uniform"     -> equal weight (1/k) at every step
+    #   "final_heavy" -> last step weight = 0.5, remaining weight spread over earlier steps
+    step_loss_weighting: "uniform"
+
+# ---------------------------------------------------------------------------
+# Checkpointing & Logging
+# ---------------------------------------------------------------------------
+checkpointing:
+  save_dir: "checkpoints/phase2_rollout"
+  save_every_n_epochs: 2
+  keep_last_n: 3
+
+logging:
+  log_every_n_steps: 10
+  val_every_n_epochs: 1
+  use_wandb: false
+  project: "aurora-mjo"
