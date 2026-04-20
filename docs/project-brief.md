@@ -14,7 +14,7 @@ The intended research direction is:
 - Use LoRA for efficient long-horizon specialization.
 - Add a moisture-centered auxiliary physics-informed loss only after the supervised baseline is stable.
 
-## Current Status
+## Current Status / Completed
 
 The repository already contains code for:
 - ERA5 ingestion and preprocessing
@@ -23,6 +23,13 @@ The repository already contains code for:
 - custom losses
 - training loop infrastructure
 - SLURM submission
+
+The following major Phase 2 milestones are now fully completed and integrated:
+- Build or validate a correct RMM evaluation pipeline
+- Add an explicit MJO head to the model
+- Introduce rollout training
+- Implement LoRA-based long-horizon specialization
+- Add optional moisture-budget auxiliary loss
 
 Some of this code is out of date relative to the current intended roadmap. In particular, the old code may reflect:
 - single-step fine-tuning assumptions
@@ -51,11 +58,6 @@ Key metrics include:
 ## Current Priorities
 
 1. Audit the existing codebase against the current roadmap.
-2. Build or validate a correct RMM evaluation pipeline.
-3. Add an explicit MJO head to the model.
-4. Introduce rollout training.
-5. Implement LoRA-based long-horizon specialization.
-6. Add optional moisture-budget auxiliary loss.
 
 ## Non-goals for now
 

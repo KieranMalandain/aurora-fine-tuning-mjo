@@ -5,11 +5,6 @@ This file lists parts of the repository that are known to be incomplete, outdate
 ## Known / suspected gaps
 
 - current code may reflect an earlier project plan
-- explicit MJO head may not yet exist
-- RMM evaluation may be partial or outdated
-- rollout curriculum may not yet be implemented
-- LoRA integration may not match current intended design
-- physics-informed loss may still reflect an earlier formulation
 - Yale vs LANL/NERSC data assumptions may differ
 
 ## Rule for agents

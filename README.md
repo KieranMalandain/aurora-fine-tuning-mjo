@@ -31,10 +31,18 @@ aurora-fine-tuning-mjo/
 │   ├── phase2_physics.yaml      # Config for Physics-Informed run
 │   └── phase3_longrun.yaml      # Config for autoregressive rollouts
 │
+├── docs/                        # DOCUMENTATION HUB
+│   ├── architecture.md          # Structural details & Implementation status
+│   ├── documentation.md         # Detailed code and loop explanations
+│   ├── known-gaps.md            # Current technical gaps
+│   └── project-brief.md         # Research objectives & Priorities
+│
 ├── scripts/                     # UTILITIES (One-off tools)
 │   ├── download_era5.py         # The robust downloader (Updated for E & P)
-│   ├── calculate_norm_stats.py  # Script to compute mean/std for new vars
-│   └── compute_rmm.py           # For calculating MJO index
+│   ├── calc_norm_stats.py       # Script to compute mean/std for new vars
+│   ├── compute_rmm.py           # For calculating MJO index
+│   ├── evaluate_mjo.py          # Primary formal MJO skill capability evaluation
+│   └── smoke_test_*.py          # Autoregressive & LoRA freezing unit tests
 │
 ├── slurm/                       # INFRASTRUCTURE
 │   ├── train.slurm              # The generic submission script
@@ -43,12 +51,12 @@ aurora-fine-tuning-mjo/
 ├── src/                         # CORE LOGIC (The Engine)
 │   ├── __init__.py
 │   ├── dataset.py               # The MJODataset class (Lazy Loading)
-│   ├── model.py                 # Aurora wrapper (LoRA setup, Checkpointing)
+│   ├── model.py                 # Aurora wrapper (MJO Head, LoRA freeze setup)
 │   ├── loss.py                  # Custom losses (Spectral + Moisture Budget)
-│   └── trainer.py               # The training loop, validation, & logging
+│   └── trainer.py               # Rollout timeline logic, dictionary loss accumulation
 │
 ├── environment.yml              # Dependencies
-├── README.md                    # Documentation
+├── README.md                    # Core Documentation
 └── train.py                     # MAIN ENTRY POINT
 ```
 
@@ -56,12 +64,15 @@ aurora-fine-tuning-mjo/
 
 ## 🧪 Methodology & Pipeline
 
-We utilize a two-stage fine-tuning approach (Full-Model Adaptation followed by **LoRA** Rollouts) to adapt Aurora to the specific dynamics of the tropics.
+We utilize a comprehensive multi-stage fine-tuning approach (Full-Model Adaptation followed by **LoRA** Autoregressive Rollouts) to adapt Aurora to the specific dynamics of the tropics.
 
 ### The "Physics-First" Data Strategy
 We identified that Foundation Models require absolute physical consistency. We engineered a pipeline to ingest raw **ERA5 Reanalysis** data (1° Global, 6-hourly, upsampled to 0.25°), extending the model's embedding space to include MJO-critical variables:
 *   **Outgoing Longwave Radiation (OLR):** A proxy for tropical convection.
 *   **Total Column Water Vapor (TCWV):** Capturing "moisture mode" dynamics.
+
+### Functioning Physics-First Looping Pipeline
+Phase 2 development established a complete autoregressive modeling sequence. The system actively advances predicted state vectors ($k$-step rollouts) while accumulating complex dictionary losses across time. To counteract convective oversmoothing natively found in rollouts, we impose a custom **Moisture-Budget Physics Loss**, directly regularizing predictions according to Evaporation-Precipitation (E-P) limits. 
 
 ### HPC Optimization
 Training a 1.3B parameter model on high-resolution global grids requires aggressive optimization. Our pipeline implements:
@@ -129,7 +140,11 @@ sbatch slurm_scripts/investigate_finetuning.slurm
 
 ## 📄 Main References & Papers
 
-* Please review the [full documentation](docs/documentation.md) of the project source code.
+* Please review the comprehensive documentation covering the whole system functionality:
+  * [Project Architecture](docs/architecture.md)
+  * [Source Code Technical Documentation](docs/documentation.md)
+  * [Project Brief & Priorities](docs/project-brief.md)
+  * [Known Gaps & Issues](docs/known-gaps.md)
 *   **Project Paper:** [Find here](docs/papers/aurora-mjo-fall-paper.pdf)---as of December 2025
 *   **Aurora:** Bodnar et al., *"Aurora: A Foundation Model for the Earth System"* (arXiv:2405.13063)
 *   **LoRA:** Hu et al., *"LoRA: Low-Rank Adaptation of Large Language Models"* (ICLR 2022)
