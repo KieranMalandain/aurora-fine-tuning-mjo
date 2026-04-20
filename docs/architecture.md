@@ -52,7 +52,7 @@ The main non-default variables of interest are:
 
 These variables are treated as critical for convective and moisture-envelope representation.
 
-### MJO Head (implemented – scaffold)
+### MJO Head (implemented)
 
 An explicit MJO head is implemented in `src/model.py` as `AuroraMJO`.
 The head predicts:
@@ -93,19 +93,19 @@ LoRA is used to specialize the model for long-horizon MJO forecasting while keep
 
 ## Training Design
 
-### Baseline phase
+### Baseline phase (Completed)
 
 - one-step or short-horizon supervised training
 - stabilize variable injection
 - establish evaluation pipeline
 
-### Rollout phase
+### Rollout phase (Completed)
 
 - multi-step autoregressive training
 - increasing rollout horizon curriculum
 - lead-dependent loss accounting
 
-### Physics-informed phase
+### Physics-informed phase (Completed)
 
 - add optional moisture-budget auxiliary loss
 - small weight initially
@@ -138,6 +138,6 @@ Primary intended metrics:
 - **TCWV Injection:** Working. Passed via the `surf_vars` dictionary mapping.
 - **Missing Static Variable:** LANL data lacks `slt` (Soil Type). The DataLoader currently injects a dummy zero-tensor of shape `(720, 1440)` to prevent model crashes. Human is working on obtaining the soil-type data.
 - **Checkpoint Format:** `microsoft/aurora` (aurora-0.25-pretrained.ckpt). Always loaded with `strict=False` to accommodate the randomly initialized embedding layers for `ttr` and `tcwv`.
-- **Target Architecture (Pending):** A dual-head system. 
+- **Target Architecture (Implemented):** A dual-head system. 
   1. *State Head:* Aurora's default decoder outputting the full grid.
   2. *MJO Head:* An MLP attached to the encoder's latent space (tropical pooled) outputting `[RMM1, RMM2, Amplitude]`.
