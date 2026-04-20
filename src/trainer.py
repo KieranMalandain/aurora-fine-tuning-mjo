@@ -29,7 +29,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from src.loss import TropicalWeightedL1Loss, SpectralLoss
+from src.loss import TropicalWeightedL1Loss, SpectralLoss, MoistureBudgetLoss
 
 log = logging.getLogger(__name__)
 
@@ -300,6 +300,28 @@ class Trainer:
         self.use_mjo_head_loss = mjo_cfg.get("enabled", False)
         self.mjo_head_weight   = float(mjo_cfg.get("weight", 0.0))
 
+        # Moisture-budget physics loss (Phase 2 only)
+        phys_cfg = loss_cfg.get("moisture_budget", {})
+        self.use_moisture_budget = phys_cfg.get("enabled", False)
+        self.moisture_budget_weight = float(phys_cfg.get("weight", 0.0))
+        if self.use_moisture_budget and self.moisture_budget_weight > 0:
+            # Aurora native 0.25° grid: 720 lat × 1440 lon
+            pressure_levels = [50, 100, 150, 200, 250, 300, 400, 500,
+                               600, 700, 850, 925, 1000]  # hPa
+            lat_coords = torch.linspace(90, -90, 720).tolist()
+            lon_coords = torch.linspace(0, 359.75, 1440).tolist()
+            self.moisture_budget_loss = MoistureBudgetLoss(
+                pressure_levels=pressure_levels,
+                latitudes=lat_coords,
+                longitudes=lon_coords,
+                dt_seconds=phys_cfg.get("dt_seconds", 21600),
+                tropics_bbox=tuple(phys_cfg.get("tropics_bbox", [-20, 20])),
+            ).to(device)
+            log.info("Moisture-budget physics loss enabled (weight=%.4f)",
+                     self.moisture_budget_weight)
+        else:
+            self.moisture_budget_loss = None
+
         # ------------------------------------------------------------------
         # Optimiser & data
         # ------------------------------------------------------------------
@@ -422,7 +444,7 @@ class Trainer:
         weights = self._step_weights(k)
 
         # Accumulate per-component losses weighted across rollout steps.
-        acc = {"grid": 0.0, "spectral": 0.0, "mjo_head": 0.0}
+        acc = {"grid": 0.0, "spectral": 0.0, "mjo_head": 0.0, "moisture_budget": 0.0}
 
         current_batch = in_batch
 
@@ -470,6 +492,11 @@ class Trainer:
                     target_dict["mjo_targets"].to(self.device),
                 )
                 acc["mjo_head"] = acc["mjo_head"] + w * self.mjo_head_weight * mjo_l1
+
+            # ---- Moisture-budget physics loss ----
+            if self.moisture_budget_loss is not None:
+                mb_loss = self.moisture_budget_loss(current_batch, pred_batch)
+                acc["moisture_budget"] = acc["moisture_budget"] + w * self.moisture_budget_weight * mb_loss
 
             # ---- Advance state for next rollout step ----
             if step_idx < k - 1:
@@ -541,7 +568,8 @@ class Trainer:
                     f"| loss={losses['total'].item():.4f} "
                     f"(grid={losses['grid'].item():.4f}, "
                     f"spec={losses['spectral'].item():.4f}, "
-                    f"mjo={losses['mjo_head'].item():.4f}) "
+                    f"mjo={losses['mjo_head'].item():.4f}, "
+                    f"phys={losses['moisture_budget'].item():.4f}) "
                     f"| lr={lr:.2e}"
                 )
 
