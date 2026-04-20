@@ -1,18 +1,11 @@
 name: aurora_mjo
 channels:
+  - conda-forge
   - pytorch
   - nvidia
-  - conda-forge
-  - nodefaults
 dependencies:
   - python=3.10
   - pip
-  
-  - pytorch::pytorch
-  - pytorch::torchvision
-  - pytorch::torchaudio
-  - pytorch::pytorch-cuda=12.8 # bouchet cuda version
-
   - numpy
   - pandas
   - xarray
@@ -20,12 +13,13 @@ dependencies:
   - bottleneck
   - netcdf4
   - h5netcdf
-  - cfgrib  
-  - cdsapi  
-
+  - cfgrib
+  - cdsapi
   - matplotlib
   - jupyterlab
   - pre-commit
-
+  - pytorch
+  - torchvision
+  - torchaudio
   - pip:
-    - microsoft-aurora
+      - microsoft-aurora
