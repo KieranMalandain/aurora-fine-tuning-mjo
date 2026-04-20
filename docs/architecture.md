@@ -76,14 +76,20 @@ Implementation:
 
 ### LoRA
 
-LoRA will be used to specialize the model for long-horizon MJO forecasting while keeping the main Aurora backbone mostly frozen.
+LoRA is used to specialize the model for long-horizon MJO forecasting while keeping the pretrained Aurora backbone mostly frozen.
 
-[EDIT ME]
-Document expected insertion points if known:
-- attention q/k/v?
-- output projections?
-- MLP blocks?
-- only selected layers?
+**Confirmed insertion points** (from `aurora/model/swin3d.py`):
+- `lora_qkv`: a `LoRARollout` adapter on the fused QKV projection of every Swin3D window-attention block (`dim → dim×3`).
+- `lora_proj`: a `LoRARollout` adapter on the output projection of every Swin3D window-attention block (`dim → dim`).
+- MLP blocks are **not** adapted by LoRA.
+- Default rank `r=8`, alpha `8`; mode controlled by `config['lora_mode']` (`"single"`, `"from_second"`, or `"all"`).
+
+**Freezing strategy** (implemented in `src/model.py::freeze_backbone()`):
+- All backbone parameters start frozen (`requires_grad=False`).
+- Unfrozen when `use_lora=True`: all `LoRA`/`LoRARollout` module parameters (`lora_A`, `lora_B`).
+- Unfrozen always: patch-embedding weights for newly injected surface variables (`ttr`, `tcwv`) — these are randomly initialized because the pretrained checkpoint has no entry for them.
+- The `MJOHead` MLP is fully trainable (it lives outside the backbone).
+- To disable freezing entirely (full fine-tune), set `config['freeze_backbone'] = False`.
 
 ## Training Design
 

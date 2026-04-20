@@ -11,20 +11,25 @@ Design principles:
   - Dummy/real dataset selection is controlled by config['data']['use_dummy'].
   - Loss terms are individually gated by config flags so they can be toggled
     without touching this file.
-  - Autoregressive rollout is scaffolded but disabled by default (Phase 1).
+  - Autoregressive rollout is enabled via config['training']['rollout']['enabled'].
+    The curriculum starts at `start_steps` and grows by one every
+    `step_increase_every_n_epochs`, capped at `max_steps`.  Phase 1 configs
+    leave rollout disabled and behaviour is identical to the original single-step
+    path.
   - Modular so LoRA and rollout curriculum can be layered on top cleanly.
 """
 
 import os
 import math
 import logging
+from datetime import timedelta
 from pathlib import Path
 
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from src.loss import TropicalWeightedL1Loss, SpectralLoss
+from src.loss import TropicalWeightedL1Loss, SpectralLoss, MoistureBudgetLoss
 
 log = logging.getLogger(__name__)
 
@@ -105,6 +110,73 @@ def _extract_batch_outputs(pred_batch, target_dict, device):
     pred_tensor = torch.cat([t.reshape(t.shape[0], -1) for t in pred_parts], dim=-1)
     tgt_tensor  = torch.cat([t.reshape(t.shape[0], -1) for t in tgt_parts],  dim=-1)
     return pred_tensor, tgt_tensor
+
+
+def _advance_batch(in_batch, pred_batch, step_index: int):
+    """Build the next input Batch from the previous prediction.
+
+    Aurora keeps a rolling 2-timestep history window in surf_vars / atmos_vars
+    (shape ``(B, t, ...)`` where ``t = 2``).  To advance one step we:
+
+    1. Drop the oldest timestep (index 0) and append the new prediction at the
+       back, giving shape ``(B, 2, ...)`` again.
+    2. Advance ``metadata.time`` by 6 h (one Aurora step) for every element in
+       the batch.
+    3. Increment ``metadata.rollout_step`` so Aurora selects the correct LoRA
+       adapter when LoRA is enabled.
+
+    Args:
+        in_batch: The Batch passed into the *current* step's forward pass.
+        pred_batch: The Batch returned by the *current* step's forward pass.
+        step_index: 0-indexed rollout step (used to set rollout_step).
+
+    Returns:
+        A new Batch ready to be fed into the next rollout step.
+    """
+    from aurora.batch import Batch, Metadata
+
+    dt = timedelta(hours=6)
+
+    # Advance the surface variables: roll history window.
+    # pred_batch.surf_vars has shape (B, 1, H, W) -- the single predicted step.
+    # in_batch.surf_vars has shape (B, 2, H, W) -- [t-1, t].
+    # Next input window = [t, pred] i.e. drop oldest, append prediction.
+    new_surf = {}
+    for k in in_batch.surf_vars:
+        history = in_batch.surf_vars[k]          # (B, 2, H, W)
+        pred_k  = pred_batch.surf_vars.get(k)    # (B, 1, H, W) or None
+        if pred_k is not None:
+            new_surf[k] = torch.cat([history[:, 1:, ...], pred_k], dim=1)
+        else:
+            # Variable not in prediction; carry forward the last known state.
+            new_surf[k] = torch.cat([history[:, 1:, ...], history[:, -1:, ...]], dim=1)
+
+    new_atmos = {}
+    for k in in_batch.atmos_vars:
+        history = in_batch.atmos_vars[k]         # (B, 2, C, H, W)
+        pred_k  = pred_batch.atmos_vars.get(k)   # (B, 1, C, H, W) or None
+        if pred_k is not None:
+            new_atmos[k] = torch.cat([history[:, 1:, ...], pred_k], dim=1)
+        else:
+            new_atmos[k] = torch.cat([history[:, 1:, ...], history[:, -1:, ...]], dim=1)
+
+    # Advance time tags for each batch element.
+    new_time = tuple(t + dt for t in in_batch.metadata.time)
+
+    new_metadata = Metadata(
+        lat=in_batch.metadata.lat,
+        lon=in_batch.metadata.lon,
+        time=new_time,
+        atmos_levels=in_batch.metadata.atmos_levels,
+        rollout_step=step_index + 1,  # step_index is 0-based; next step is +1
+    )
+
+    return Batch(
+        surf_vars=new_surf,
+        static_vars=in_batch.static_vars,   # static fields do not change
+        atmos_vars=new_atmos,
+        metadata=new_metadata,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -228,6 +300,28 @@ class Trainer:
         self.use_mjo_head_loss = mjo_cfg.get("enabled", False)
         self.mjo_head_weight   = float(mjo_cfg.get("weight", 0.0))
 
+        # Moisture-budget physics loss (Phase 2 only)
+        phys_cfg = loss_cfg.get("moisture_budget", {})
+        self.use_moisture_budget = phys_cfg.get("enabled", False)
+        self.moisture_budget_weight = float(phys_cfg.get("weight", 0.0))
+        if self.use_moisture_budget and self.moisture_budget_weight > 0:
+            # Aurora native 0.25° grid: 720 lat × 1440 lon
+            pressure_levels = [50, 100, 150, 200, 250, 300, 400, 500,
+                               600, 700, 850, 925, 1000]  # hPa
+            lat_coords = torch.linspace(90, -90, 720).tolist()
+            lon_coords = torch.linspace(0, 359.75, 1440).tolist()
+            self.moisture_budget_loss = MoistureBudgetLoss(
+                pressure_levels=pressure_levels,
+                latitudes=lat_coords,
+                longitudes=lon_coords,
+                dt_seconds=phys_cfg.get("dt_seconds", 21600),
+                tropics_bbox=tuple(phys_cfg.get("tropics_bbox", [-20, 20])),
+            ).to(device)
+            log.info("Moisture-budget physics loss enabled (weight=%.4f)",
+                     self.moisture_budget_weight)
+        else:
+            self.moisture_budget_loss = None
+
         # ------------------------------------------------------------------
         # Optimiser & data
         # ------------------------------------------------------------------
@@ -265,60 +359,157 @@ class Trainer:
         self.keep_last_n    = ckpt_cfg.get("keep_last_n", 3)
         self.save_dir.mkdir(parents=True, exist_ok=True)
 
+        # ------------------------------------------------------------------
+        # Rollout curriculum config
+        # ------------------------------------------------------------------
+        rollout_cfg = train_cfg.get("rollout", {})
+        self.rollout_enabled    = rollout_cfg.get("enabled", False)
+        self.rollout_start      = max(1, rollout_cfg.get("start_steps", 1))
+        self.rollout_max        = max(self.rollout_start, rollout_cfg.get("max_steps", 1))
+        self.rollout_incr_every = max(1, rollout_cfg.get("step_increase_every_n_epochs", 2))
+        self.rollout_weighting  = rollout_cfg.get("step_loss_weighting", "uniform")
+
         self._step = 0          # global optimiser step counter
         self._saved_ckpts = []  # for keep_last_n bookkeeping
+
+    # ------------------------------------------------------------------
+    # Rollout helpers
+    # ------------------------------------------------------------------
+
+    def _current_rollout_steps(self, epoch: int) -> int:
+        """Return the active rollout horizon for this epoch.
+
+        The curriculum starts at ``rollout_start`` and grows by 1 every
+        ``rollout_incr_every`` epochs, up to ``rollout_max``.
+
+        Examples (start=1, max=4, incr_every=2)::
+
+            epoch 1-2  -> 1 step
+            epoch 3-4  -> 2 steps
+            epoch 5-6  -> 3 steps
+            epoch 7+   -> 4 steps
+        """
+        if not self.rollout_enabled:
+            return 1
+        increments = (epoch - 1) // self.rollout_incr_every
+        return min(self.rollout_start + increments, self.rollout_max)
+
+    def _step_weights(self, k: int) -> list:
+        """Return a list of per-step loss weights that sums to 1.
+
+        Strategy is controlled by ``self.rollout_weighting``:
+
+        - ``"uniform"``     : equal weight ``1/k`` at every step.
+        - ``"final_heavy"`` : last step = 0.5; earlier steps share the rest
+          equally.
+        """
+        if k == 1:
+            return [1.0]
+        if self.rollout_weighting == "final_heavy":
+            early_w = 0.5 / (k - 1)
+            return [early_w] * (k - 1) + [0.5]
+        # default: uniform
+        return [1.0 / k] * k
 
     # ------------------------------------------------------------------
     # Forward + loss
     # ------------------------------------------------------------------
 
-    def _compute_loss(self, in_batch, target_dict) -> dict:
+    def _compute_loss(self, in_batch, target_dict, epoch: int = 1) -> dict:
         """
-        Run a single forward pass and compute the composite loss.
+        Run one or more forward passes and compute the composite loss.
 
-        Returns a dict with keys: 'total', 'grid', 'spectral', 'mjo_head'.
-        All values are scalar tensors.
+        When rollout is disabled (Phase 1) this is identical to the original
+        single-step forward pass.  When enabled, the model is called k times
+        autoregressively; the predicted state is used as input for the next
+        step via :func:`_advance_batch`.  The per-step grid/spectral/mjo_head
+        losses are accumulated with the weighting strategy specified in the
+        config.
+
+        Args:
+            in_batch:    Initial Aurora Batch (from the DataLoader).
+            target_dict: Dict of target tensors (single-step, from the
+                         DataLoader).  Only used to compute losses against the
+                         *step-1* target; for k > 1 steps we still compare
+                         every prediction against this same target because the
+                         dataset emits only one-step targets.
+            epoch:       Current epoch number (1-indexed) used to look up the
+                         curriculum step.
+
+        Returns:
+            Dict with keys: 'total', 'grid', 'spectral', 'mjo_head'.
+            All values are scalar tensors.
         """
-        # Move Aurora Batch metadata to device where needed
-        in_batch = in_batch  # Batch is a dataclass; tensors move with .to() below
+        k = self._current_rollout_steps(epoch)
+        weights = self._step_weights(k)
 
-        # Forward (single step -- rollout disabled in Phase 1)
-        pred_batch = self.model(in_batch)
+        # Accumulate per-component losses weighted across rollout steps.
+        acc = {"grid": 0.0, "spectral": 0.0, "mjo_head": 0.0, "moisture_budget": 0.0}
 
-        losses = {}
+        current_batch = in_batch
 
-        # ---- Grid loss ----
-        if self.use_grid_loss:
-            pred_t, tgt_t = _extract_batch_outputs(pred_batch, target_dict, self.device)
-            if pred_t is not None:
-                # Reshape to (B, Lat, Lon) for the spatial weighting
-                # TropicalWeightedL1Loss broadcasts over (B, T, Lat, Lon)
-                losses["grid"] = self.grid_loss(pred_t, tgt_t)
+        for step_idx in range(k):
+            w = weights[step_idx]
+
+            # ---- Forward pass ----
+            model_out = self.model(current_batch)
+
+            # Handle dual-head output (mjo_head enabled) vs plain Batch.
+            if isinstance(model_out, tuple):
+                pred_batch, mjo_pred = model_out
             else:
-                losses["grid"] = torch.tensor(0.0, device=self.device)
-        else:
-            losses["grid"] = torch.tensor(0.0, device=self.device)
+                pred_batch = model_out
+                mjo_pred   = None
 
-        # ---- Spectral loss ----
-        if self.spectral_loss is not None and self.spectral_weight > 0:
-            pred_t, tgt_t = _extract_batch_outputs(pred_batch, target_dict, self.device)
-            losses["spectral"] = self.spectral_weight * self.spectral_loss(pred_t, tgt_t)
-        else:
-            losses["spectral"] = torch.tensor(0.0, device=self.device)
+            # ---- Grid loss ----
+            if self.use_grid_loss:
+                pred_t, tgt_t = _extract_batch_outputs(
+                    pred_batch, target_dict, self.device
+                )
+                if pred_t is not None:
+                    acc["grid"] = acc["grid"] + w * self.grid_loss(pred_t, tgt_t)
+            # (if not use_grid_loss, acc["grid"] stays 0.0)
 
-        # ---- MJO head loss ----
-        # Disabled in Phase 1.  When enabled, the model must return an 'mjo_preds'
-        # attribute from the forward pass (RMM1, RMM2, Amplitude).
-        if self.use_mjo_head_loss and hasattr(pred_batch, "mjo_preds") and "mjo_targets" in target_dict:
-            mjo_l1 = nn.functional.l1_loss(
-                pred_batch.mjo_preds.to(self.device),
-                target_dict["mjo_targets"].to(self.device),
-            )
-            losses["mjo_head"] = self.mjo_head_weight * mjo_l1
-        else:
-            losses["mjo_head"] = torch.tensor(0.0, device=self.device)
+            # ---- Spectral loss ----
+            if self.spectral_loss is not None and self.spectral_weight > 0:
+                pred_t, tgt_t = _extract_batch_outputs(
+                    pred_batch, target_dict, self.device
+                )
+                if pred_t is not None:
+                    acc["spectral"] = (
+                        acc["spectral"]
+                        + w * self.spectral_weight * self.spectral_loss(pred_t, tgt_t)
+                    )
 
-        losses["total"] = sum(v for v in losses.values())
+            # ---- MJO head loss ----
+            if (
+                self.use_mjo_head_loss
+                and mjo_pred is not None
+                and "mjo_targets" in target_dict
+            ):
+                mjo_l1 = nn.functional.l1_loss(
+                    mjo_pred.to(self.device),
+                    target_dict["mjo_targets"].to(self.device),
+                )
+                acc["mjo_head"] = acc["mjo_head"] + w * self.mjo_head_weight * mjo_l1
+
+            # ---- Moisture-budget physics loss ----
+            if self.moisture_budget_loss is not None:
+                mb_loss = self.moisture_budget_loss(current_batch, pred_batch)
+                acc["moisture_budget"] = acc["moisture_budget"] + w * self.moisture_budget_weight * mb_loss
+
+            # ---- Advance state for next rollout step ----
+            if step_idx < k - 1:
+                current_batch = _advance_batch(current_batch, pred_batch, step_idx)
+
+        # Convert accumulated floats / tensors to scalar tensors.
+        def _to_tensor(v):
+            if isinstance(v, torch.Tensor):
+                return v
+            return torch.tensor(v, device=self.device)
+
+        losses = {k_: _to_tensor(v) for k_, v in acc.items()}
+        losses["total"] = sum(losses.values())
         return losses
 
     # ------------------------------------------------------------------
@@ -350,7 +541,7 @@ class Trainer:
             else:
                 raise ValueError(f"Unexpected batch tuple length: {len(batch)}")
 
-            losses = self._compute_loss(in_batch, target_dict)
+            losses = self._compute_loss(in_batch, target_dict, epoch=epoch)
             loss = losses["total"] / self.grad_accum_steps
 
             loss.backward()
@@ -370,12 +561,15 @@ class Trainer:
 
             if batch_idx % self.log_every == 0:
                 lr = self.optimizer.param_groups[0]["lr"]
+                k = self._current_rollout_steps(epoch)
                 log.info(
                     f"Epoch {epoch:03d} | step {batch_idx:05d}/{num_batches} "
+                    f"| rollout_k={k} "
                     f"| loss={losses['total'].item():.4f} "
                     f"(grid={losses['grid'].item():.4f}, "
                     f"spec={losses['spectral'].item():.4f}, "
-                    f"mjo={losses['mjo_head'].item():.4f}) "
+                    f"mjo={losses['mjo_head'].item():.4f}, "
+                    f"phys={losses['moisture_budget'].item():.4f}) "
                     f"| lr={lr:.2e}"
                 )
 
@@ -407,7 +601,7 @@ class Trainer:
             else:
                 raise ValueError(f"Unexpected batch tuple length: {len(batch)}")
 
-            losses = self._compute_loss(in_batch, target_dict)
+            losses = self._compute_loss(in_batch, target_dict, epoch=epoch)
             val_loss += losses["total"].item()
 
         mean_val = val_loss / max(num_batches, 1)

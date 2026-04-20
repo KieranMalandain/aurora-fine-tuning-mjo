@@ -29,7 +29,14 @@ import torch
 import torch.nn as nn
 from aurora import Aurora, AuroraSmallPretrained
 from aurora.batch import Batch
+from aurora.model.lora import LoRA, LoRARollout
 from aurora.normalisation import locations, scales
+
+# Aurora's built-in default surface variables (from Aurora.__init__ signature).
+# Any variable in our config's surface_variables list that is NOT here was
+# newly added and its embedding weights were randomly initialized — those
+# must remain trainable.
+_AURORA_DEFAULT_SURF_VARS: frozenset[str] = frozenset({"2t", "10u", "10v", "msl"})
 
 
 # ---------------------------------------------------------------------------
@@ -238,6 +245,109 @@ class AuroraMJO(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# Freezing helpers
+# ---------------------------------------------------------------------------
+
+def _is_lora_param(name: str, module: nn.Module) -> bool:
+    """Return True if *module* is a LoRA adapter layer.
+
+    Aurora's ``LoRA`` / ``LoRARollout`` contain ``lora_A`` and ``lora_B``
+    parameters.  We match by direct module-type rather than name-suffix to
+    avoid false positives if user code happens to share the same suffix.
+    """
+    return isinstance(module, (LoRA, LoRARollout))
+
+
+def freeze_backbone(
+    backbone: Aurora,
+    new_surf_vars: tuple[str, ...],
+    use_lora: bool,
+) -> None:
+    """Freeze the Aurora backbone except for LoRA adapters and new-variable embeddings.
+
+    Calling strategy
+    ----------------
+    1. Freeze **everything** in the backbone with ``requires_grad = False``.
+    2. Unfreeze LoRA adapter parameters (``lora_A``, ``lora_B``) when
+       ``use_lora=True``.  These are identified by their containing module
+       type (:class:`aurora.model.lora.LoRA` / ``LoRARollout``), not by name,
+       to avoid any accidental matches.
+    3. Unfreeze the patch-embedding weights of *newly injected* surface
+       variables (i.e. any variable in ``new_surf_vars`` that is not among
+       Aurora's built-in defaults).  These weights were randomly initialized
+       on construction because the pretrained checkpoint has no entry for them.
+
+    Args:
+        backbone: The Aurora model instance.
+        new_surf_vars: The full tuple of surface variable names passed to
+            Aurora, as read from ``config['surface_variables']``.
+        use_lora: Whether LoRA adapters are inserted (i.e.
+            ``config['use_lora']``).
+    """
+    # --- Step 1: blanket freeze ---
+    for param in backbone.parameters():
+        param.requires_grad_(False)
+
+    # --- Step 2: unfreeze LoRA adapter parameters ---
+    if use_lora:
+        for mod_name, mod in backbone.named_modules():
+            if _is_lora_param(mod_name, mod):
+                for param in mod.parameters():
+                    param.requires_grad_(True)
+
+    # --- Step 3: unfreeze new-variable patch embeddings ---
+    injected_vars = [
+        v for v in new_surf_vars if v not in _AURORA_DEFAULT_SURF_VARS
+    ]
+    if injected_vars:
+        surf_embed = backbone.encoder.surf_token_embeds
+        for var in injected_vars:
+            if var in surf_embed.weights:
+                surf_embed.weights[var].requires_grad_(True)
+            else:
+                print(
+                    f"[freeze_backbone] WARNING: '{var}' not found in "
+                    "surf_token_embeds.weights; skipping unfreeze."
+                )
+
+
+def _log_param_counts(model: nn.Module, label: str = "model") -> None:
+    """Print a summary of trainable vs total parameter counts.
+
+    Breakdown is shown per top-level named child so it is easy to spot
+    which sub-module is contributing trainable parameters.
+
+    Args:
+        model: The module to inspect.
+        label: Human-readable name printed in the header line.
+    """
+    total = sum(p.numel() for p in model.parameters())
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    frozen = total - trainable
+
+    print(
+        f"\n{'='*60}\n"
+        f" Parameter audit: {label}\n"
+        f"{'='*60}\n"
+        f"  Total      : {total:>12,}\n"
+        f"  Trainable  : {trainable:>12,}  ({100*trainable/max(total,1):.2f}%)\n"
+        f"  Frozen     : {frozen:>12,}  ({100*frozen/max(total,1):.2f}%)\n"
+        f"{'='*60}"
+    )
+
+    # Per-child breakdown (only if they have params)
+    for child_name, child in model.named_children():
+        c_total = sum(p.numel() for p in child.parameters())
+        if c_total == 0:
+            continue
+        c_train = sum(p.numel() for p in child.parameters() if p.requires_grad)
+        print(
+            f"  {child_name:<30}  trainable={c_train:>10,} / {c_total:>10,}"
+        )
+    print()
+
+
+# ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
 
@@ -280,6 +390,24 @@ def load_model(config: dict, norm_stats: Optional[dict] = None) -> AuroraMJO:
         backbone.configure_activation_checkpointing()
 
     # ------------------------------------------------------------------
+    # LoRA-aware weight freezing
+    # ------------------------------------------------------------------
+    # Aurora's use_lora=True inserts LoRA adapter modules but does NOT
+    # call requires_grad_(False) on any backbone weights.  We do that here.
+    # Freezing is applied regardless of use_lora so that even in the
+    # full-fine-tune path the caller can opt in by setting
+    # config['freeze_backbone'] = True explicitly.
+    if config.get("freeze_backbone", True):
+        print("Freezing backbone (keeping LoRA adapters + new-var embeddings trainable)")
+        freeze_backbone(
+            backbone=backbone,
+            new_surf_vars=tuple(config["surface_variables"]),
+            use_lora=config["use_lora"],
+        )
+    else:
+        print("WARNING: freeze_backbone=False — full backbone will be trained.")
+
+    # ------------------------------------------------------------------
     # MJO head (optional)
     # ------------------------------------------------------------------
     mjo_head: Optional[MJOHead] = None
@@ -305,4 +433,11 @@ def load_model(config: dict, norm_stats: Optional[dict] = None) -> AuroraMJO:
     else:
         print("MJO head disabled  (set config['mjo_head']['enabled']=True to activate)")
 
-    return AuroraMJO(backbone=backbone, mjo_head=mjo_head)
+    model = AuroraMJO(backbone=backbone, mjo_head=mjo_head)
+
+    # ------------------------------------------------------------------
+    # Trainable parameter audit
+    # ------------------------------------------------------------------
+    _log_param_counts(model, label="AuroraMJO")
+
+    return model

@@ -1,14 +1,23 @@
-# configs/phase2_physics.yaml
-# Phase 2 Physics: auxiliary moisture-budget loss for convective conservation.
-# Inherits structure from phase1_baseline.yaml with physics loss enabled.
+# configs/phase2_rollout.yaml
+# Phase 2 Rollout: autoregressive multi-step training.
+#
+# This config inherits the same model/data/loss settings as phase1_baseline but
+# enables the rollout curriculum.  Do NOT edit phase1_baseline.yaml; override
+# individual keys here instead.
+#
+# Smoke-test command (2-step rollout, dummy data, CPU):
+#   python train.py --config configs/phase2_rollout.yaml
 
 experiment:
-  name: "phase2_physics_rollout"
-  description: "Phase 2: Aurora fine-tuning with moisture-budget physics auxiliary loss + autoregressive rollout."
+  name: "phase2_rollout"
+  description: >
+    Multi-step autoregressive rollout training starting at T=1 and growing to
+    T=4 across epochs.  Tropical-weighted L1 loss accumulated at every rollout
+    step with uniform weighting (configurable below).
   seed: 42
 
 # ---------------------------------------------------------------------------
-# Data  (same as baseline)
+# Data (same as phase1 by default; switch use_dummy: false on NERSC)
 # ---------------------------------------------------------------------------
 data:
   use_dummy: true
@@ -30,7 +39,7 @@ data:
   pin_memory: true
 
 # ---------------------------------------------------------------------------
-# Model  (same as baseline)
+# Model (same as phase1 by default)
 # ---------------------------------------------------------------------------
 model:
   model_type: "small"
@@ -48,66 +57,72 @@ model:
 
   norm_stats: {}
 
+  mjo_head:
+    enabled: false
+
 # ---------------------------------------------------------------------------
-# Losses — PHYSICS LOSS ENABLED
+# Losses (same as phase1)
 # ---------------------------------------------------------------------------
 loss:
-  # Tropical-weighted grid loss (unchanged from baseline)
   grid:
     enabled: true
     tropics_bbox: [-20, 20]
     tropics_weight: 1.0
     extratropics_weight: 0.1
 
-  # Spectral loss (still disabled)
   spectral:
     enabled: false
     weight: 0.0
 
-  # MJO head L1 loss (keep disabled unless head is wired)
   mjo_head:
     enabled: false
     weight: 0.0
 
-  # Moisture-budget physics loss — ENABLED for Phase 2
   moisture_budget:
-    enabled: true
-    weight: 0.01             # Conservative start; increase if grid loss dominates
-    tropics_bbox: [-20, 20]  # Only penalise tropical columns
-    dt_seconds: 21600        # 6-hour timestep between Aurora states
+    enabled: false
+    weight: 0.0
 
 # ---------------------------------------------------------------------------
 # Optimiser & Scheduler
 # ---------------------------------------------------------------------------
 training:
-  epochs: 10
-  grad_accum_steps: 1
+  epochs: 20
+  grad_accum_steps: 4          # Compensates for small BS under multi-step rollout
   max_grad_norm: 1.0
 
   optimizer:
     name: "adamw"
-    lr: 1.0e-4
+    lr: 5.0e-5                 # Lower LR than phase1 for stability under rollout
     weight_decay: 1.0e-5
     betas: [0.9, 0.999]
 
   scheduler:
     name: "cosine"
-    warmup_steps: 100
+    warmup_steps: 200
     eta_min: 1.0e-6
 
-  # Rollout is now enabled to test the combined behavior
+  # ---------------------------------------------------------------------------
+  # Rollout curriculum
+  # ---------------------------------------------------------------------------
   rollout:
     enabled: true
+    # Horizon starts at start_steps and grows by 1 every step_increase_every_n_epochs,
+    # capped at max_steps.
     start_steps: 1
     max_steps: 4
     step_increase_every_n_epochs: 2
+
+    # Per-step loss weighting strategy:
+    #   "uniform"     -> equal weight (1/k) at every step
+    #   "final_heavy" -> last step weight = 0.5, remaining weight spread over earlier steps
+    step_loss_weighting: "uniform"
 
 # ---------------------------------------------------------------------------
 # Checkpointing & Logging
 # ---------------------------------------------------------------------------
 checkpointing:
-  save_dir: "checkpoints/phase2_physics"
-  save_every_n_epochs: 1
+  save_dir: "checkpoints/phase2_rollout"
+  save_every_n_epochs: 2
   keep_last_n: 3
 
 logging:
