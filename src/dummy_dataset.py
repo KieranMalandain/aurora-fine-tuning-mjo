@@ -158,7 +158,7 @@ class MJODataset(Dataset):
             metadata = Metadata(
                 lat = self.lat,
                 lon = self.lon,
-                time = (surf_data.time.values.astype('datatime64[s]').tolist()[1],),
+                time = (surf_data.time.values.astype('datetime64[s]').tolist()[1],),
                 atmos_levels = self.atmos_levels,
                 rollout_step = 0
             )

@@ -13,8 +13,12 @@ aurora-fine-tuning-mjo/
 │
 ├── scripts/                     # UTILITIES (One-off tools)
 │   ├── download_era5.py         # The robust downloader (Updated for E & P)
-│   ├── calculate_norm_stats.py  # Script to compute mean/std for new vars
-│   └── compute_rmm.py           # For calculating MJO index
+│   ├── calc_norm_stats.py       # Script to compute mean/std for new vars
+│   ├── compute_rmm.py           # For calculating MJO index
+│   ├── evaluate_mjo.py          # Primary formal MJO skill capability evaluation
+│   ├── smoke_test_freeze.py     # Verify LoRA frozen backbone
+│   ├── smoke_test_mjo_head.py   # Test MJO Head initialization logic
+│   └── smoke_test_rollout.py    # Test autoregressive rollout flow
 │
 ├── slurm/                       # INFRASTRUCTURE
 │   ├── train.slurm              # The generic submission script
@@ -23,9 +27,9 @@ aurora-fine-tuning-mjo/
 ├── src/                         # CORE LOGIC (The Engine)
 │   ├── __init__.py
 │   ├── dataset.py               # The MJODataset class (Lazy Loading)
-│   ├── model.py                 # Aurora wrapper (LoRA setup, Checkpointing)
+│   ├── model.py                 # Aurora wrapper (MJO Head, LoRA freeze setup)
 │   ├── loss.py                  # Custom losses (Spectral + Moisture Budget)
-│   └── trainer.py               # The training loop, validation, & logging
+│   └── trainer.py               # Rollout timeline logic, dictionary loss accumulation
 │
 ├── environment.yml              # Dependencies
 ├── README.md                    # Documentation
@@ -104,13 +108,18 @@ $$
 \frac{\partial \langle q \rangle}{\partial t} + \langle \nabla \cdot (\mathbf{v}q)\rangle - (E-P) = 0
 $$
 
-`MoistureBudgetLoss` acts to minimize the left-hand side of this equation.
+`MoistureBudgetLoss` acts to minimize the left-hand side of this equation, functioning as a regularizer during rollouts.
 
 ***
 
 ### `trainer.py`
 
-This file contains the training loop. It handles mixed precision via `autocast`, the `backward()` pass, optimizer steps, and the validation loop. It saves checkpoints and logs metrics to CSV.
+This file contains the training loop, fully supporting our **Phase 2** Autoregressive Rollouts. It handles mixed precision via `autocast`, the `backward()` pass, optimizer steps, and the validation loop. 
+
+Crucial mechanisms in this phase:
+- **`_advance_batch` timeline:** Advances the physical state inputs of the `Batch` through time recursively by treating model outputs as inputs for the next $k$-step.
+- **Dictionary Loss Accumulation:** To manage multiple forecasting steps and heads, losses are tracked in complex dictionaries spanning multiple forward passes per timestep (aggregating Spectral, Physical, and MJO losses) for proper backpropagation and lead-time reporting.
+- It saves checkpoints and logs metrics to CSV.
 
 ***
 ***
@@ -149,7 +158,17 @@ These scripts are mainly just for one-off usage. Their purpose is self-explanato
 
 ### `calculate_norm_stats.py`
 
-***
+Used to compute mean and standard deviation for the non-default ingested variables.
 
 ### `compute_rmm.py`
+
+Pre-calculates target Real-time Multivariate MJO (RMM) data that serves as truth for our supervised MJO head.
+
+### `evaluate_mjo.py`
+
+The keystone evaluation script. Produces formal skill benchmarks for the generated rollouts (amplitude errors, phase shift metrics) and assesses overall MJO-focused subseasonal behavior.
+
+### `smoke_test_*.py`
+
+Various unit test scripts generated during Phase 2 to independently verify the LoRA freezing rules, MJO Head injection validity, and Autoregressive parameter states before triggering 8+ hour SLURM jobs.
 
