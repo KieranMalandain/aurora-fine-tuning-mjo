@@ -47,102 +47,164 @@ class SpectralLoss(nn.Module):
 
 class MoistureBudgetLoss(nn.Module):
     """
-    Physics-Informed Loss: Integrated Column Moisture Budget.
-    d<q>/dt + div(<v*q>) - (E - P) = 0
-    Optimized for numerical stability (NaN prevention) and spherical topology.
-    """
-    def __init__(self, pressure_levels, latitudes, longitudes, dt_seconds=21600):
-        super().__init__()
-        self.dt = dt_seconds  
-        self.g = 9.80665      
-        self.R = 6371000.0    
-        self.rho_w = 1000.0   
-        
-        # Grid setup
-        self.register_buffer('plevs', torch.tensor(pressure_levels, dtype=torch.float32) * 100.0) # Pa
-        self.register_buffer('lats', torch.tensor(latitudes, dtype=torch.float32))
-        self.register_buffer('lons', torch.tensor(longitudes, dtype=torch.float32))
-        
-        # DP calculation
-        dp = torch.zeros_like(self.plevs)
-        dp[0] = self.plevs[1] - self.plevs[0]
-        dp[1:-1] = (self.plevs[2:] - self.plevs[:-2]) / 2.0
-        dp[-1] = self.plevs[-1] - self.plevs[-2]
-        self.register_buffer('dp', dp.view(1, 1, -1, 1, 1))
+    Physics-Informed Loss: Column-Integrated Moisture Conservation.
 
-        # --- SPHERICAL MATH FIXES ---
-        
-        # 1. dlat and dlon in radians
-        dlat_rad = torch.deg2rad(torch.abs(self.lats[0] - self.lats[1]))
-        dlon_rad = torch.deg2rad(torch.abs(self.lons[1] - self.lons[0]))
-        
-        # 2. dy is constant
-        self.dy = self.R * dlat_rad
-        
-        # 3. cos(lat) - Clamped to prevent division by zero at the poles!
-        cos_lat_raw = torch.cos(torch.deg2rad(self.lats))
+    Mathematical basis
+    ==================
+    The vertically-integrated moisture budget over an atmospheric column is:
+
+        d<q>/dt + div(<v·q>) = E − P
+
+    where:
+        <·>     = vertical integral ∫(·) dp/g  over pressure levels
+        q       = specific humidity  (kg/kg)
+        v       = (u, v) horizontal wind  (m/s)
+        E       = surface evaporation  (kg/m²/s)
+        P       = precipitation  (kg/m²/s)
+
+    Aurora does NOT predict E and P directly.  Instead we compute the
+    **implied E−P residual**:
+
+        R  =  d<q>/dt  +  div(<v·q>)
+
+    and penalise its magnitude.  A model that oversmooths convection
+    creates artificially large moisture sources / sinks (large |R|);
+    penalising |R| encourages column-wise moisture conservation.
+
+    The residual is converted from SI (kg/m²/s) to mm/day (×86 400) so
+    the loss magnitude is O(1–10), compatible with the grid L1 loss.
+
+    Only the tropical band (configurable, default ±20°) is included in
+    the loss, since MJO convection lives in the tropics.
+
+    Numerical details
+    -----------------
+    * Spherical divergence with circular longitude padding.
+    * cos(lat) clamped ≥ 1e-5 to avoid pole singularities.
+    * Central finite differences for both lat and lon derivatives.
+
+    Input contract
+    --------------
+    ``forward(in_batch, pred_batch)`` where both arguments are Aurora
+    ``Batch`` objects whose ``.atmos_vars`` contain ``'q'``, ``'u'``,
+    ``'v'`` with shape ``(B, T, levels, H, W)``.
+    """
+
+    def __init__(
+        self,
+        pressure_levels,
+        latitudes,
+        longitudes,
+        dt_seconds=21600,
+        tropics_bbox=(-20, 20),
+    ):
+        super().__init__()
+        self.dt = dt_seconds
+        self.g = 9.80665
+        self.R = 6371000.0
+
+        # ---- Grid tensors ------------------------------------------------
+        plevs = torch.tensor(pressure_levels, dtype=torch.float32) * 100.0  # hPa→Pa
+        self.register_buffer("plevs", plevs)
+
+        lats = torch.tensor(latitudes, dtype=torch.float32)
+        lons = torch.tensor(longitudes, dtype=torch.float32)
+        self.register_buffer("lats", lats)
+        self.register_buffer("lons", lons)
+
+        # Layer-thickness weights (central differences at interior, one-sided at edges)
+        dp = torch.zeros_like(plevs)
+        dp[0] = plevs[1] - plevs[0]
+        dp[1:-1] = (plevs[2:] - plevs[:-2]) / 2.0
+        dp[-1] = plevs[-1] - plevs[-2]
+        self.register_buffer("dp", dp.view(1, 1, -1, 1, 1))  # (1,1,L,1,1)
+
+        # ---- Spherical geometry ------------------------------------------
+        dlat_rad = torch.deg2rad(torch.abs(lats[0] - lats[1]))
+        dlon_rad = torch.deg2rad(torch.abs(lons[1] - lons[0]))
+
+        self.dy = self.R * dlat_rad  # constant
+
+        cos_lat_raw = torch.cos(torch.deg2rad(lats))
         cos_lat_safe = torch.clamp(cos_lat_raw, min=1e-5).view(1, 1, -1, 1)
-        self.register_buffer('cos_lat', cos_lat_safe)
-        
-        # dx depends on latitude
-        self.register_buffer('dx', self.R * self.cos_lat * dlon_rad)
+        self.register_buffer("cos_lat", cos_lat_safe)  # (1,1,H,1)
+        self.register_buffer("dx", self.R * cos_lat_safe * dlon_rad)
+
+        # ---- Tropical mask -----------------------------------------------
+        lat_south, lat_north = tropics_bbox
+        trop_mask = (lats >= lat_south) & (lats <= lat_north)  # (H,)
+        self.register_buffer("trop_mask", trop_mask)
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
 
     def vertical_integral(self, x):
-        """ <X> = int(X dp/g) """
-        return torch.sum(x * self.dp / self.g, dim=2) 
+        """Column integral  <X> = Σ X · dp / g  over pressure-level dim (dim=2)."""
+        return torch.sum(x * self.dp / self.g, dim=2)  # (B,T,H,W)
 
     def spherical_divergence(self, u_flux, v_flux):
         """
-        Computes div = 1/(R*cos(lat)) * [d(u)/d(lon) + d(v*cos(lat))/d(lat)]
-        Uses Circular Padding for Longitude to respect Earth's topology.
+        div = (1 / R cos φ) [∂u/∂λ  +  ∂(v cos φ)/∂φ]
+
+        Uses circular padding in longitude and replicate padding in latitude.
+        Inputs/outputs have shape (B, T, H, W).
         """
-        # --- LONGITUDE DERIVATIVE (With Circular Padding) ---
-        # Pad the last dimension (longitude) by 1 on both sides
-        u_padded = F.pad(u_flux, pad=(1, 1, 0, 0), mode='circular')
-        # Central difference: (right - left) / (2 * dx)
+        # ∂u/∂λ — circular in longitude
+        u_padded = F.pad(u_flux, pad=(1, 1, 0, 0), mode="circular")
         du_dlon = (u_padded[..., 2:] - u_padded[..., :-2]) / (2.0 * self.dx)
-        
-        # --- LATITUDE DERIVATIVE (With Replication Padding) ---
+
+        # ∂(v cos φ)/∂φ — replicate at poles
         v_cos_lat = v_flux * self.cos_lat
-        # Pad latitude (dim=-2) with replication (poles don't wrap around)
-        v_padded = F.pad(v_cos_lat, pad=(0, 0, 1, 1), mode='replicate')
-        # Central difference
-        # Note: If lats are decreasing (90 to -90), index 0 is North, index 2 is South.
-        # We need the gradient in the positive y (North) direction.
+        v_padded = F.pad(v_cos_lat, pad=(0, 0, 1, 1), mode="replicate")
+        # lats decrease (90→−90): index 0 = North
         dv_dlat = (v_padded[..., :-2, :] - v_padded[..., 2:, :]) / (2.0 * self.dy)
-        
-        # Combine and divide by cos(lat)
-        divergence = du_dlon + (dv_dlat / self.cos_lat)
-        return divergence
 
-    def forward(self, q_curr, preds_next):
-        # 1. Extract and integrate
-        q_next, u_next, v_next = preds_next['q'], preds_next['u'], preds_next['v']
-        
-        # If the model didn't output E and P directly, we gracefully return 0 loss 
-        # so the code doesn't crash during Phase 1 (before we add E and P).
-        if 'evap' not in preds_next or 'precip' not in preds_next:
-            return torch.tensor(0.0, device=q_curr.device, requires_grad=True)
+        return du_dlon + dv_dlat / self.cos_lat
 
-        E_next = preds_next['evap']
-        P_next = (preds_next['precip'] * self.rho_w) / self.dt 
+    # ------------------------------------------------------------------
+    # Forward
+    # ------------------------------------------------------------------
 
+    def forward(self, in_batch, pred_batch):
+        """Compute the tropical moisture-budget residual loss.
+
+        Args:
+            in_batch:  Aurora ``Batch`` for the current time step.
+            pred_batch: Aurora ``Batch`` for the predicted next time step.
+
+        Returns:
+            Scalar loss (mean |residual| in mm/day over the tropical band).
+            Returns ``0`` (with grad) if required atmos vars are missing.
+        """
+        # Guard: need q, u, v in both batches
+        required = {"q", "u", "v"}
+        for name, batch in [("in_batch", in_batch), ("pred_batch", pred_batch)]:
+            if not hasattr(batch, "atmos_vars"):
+                return torch.tensor(0.0, device=self.plevs.device, requires_grad=True)
+            if not required.issubset(batch.atmos_vars.keys()):
+                return torch.tensor(0.0, device=self.plevs.device, requires_grad=True)
+
+        q_curr = in_batch.atmos_vars["q"]     # (B, T, L, H, W)
+        q_next = pred_batch.atmos_vars["q"]
+        u_next = pred_batch.atmos_vars["u"]
+        v_next = pred_batch.atmos_vars["v"]
+
+        # Column integrals  →  (B, T, H, W)
         int_q_curr = self.vertical_integral(q_curr)
         int_q_next = self.vertical_integral(q_next)
-        int_uq_next = self.vertical_integral(u_next * q_next)
-        int_vq_next = self.vertical_integral(v_next * q_next)
+        int_uq = self.vertical_integral(u_next * q_next)
+        int_vq = self.vertical_integral(v_next * q_next)
 
-        # 2. Kinematics
+        # Moisture tendency + divergence  (kg/m²/s)
         dq_dt = (int_q_next - int_q_curr) / self.dt
-        div_flux = self.spherical_divergence(int_uq_next, int_vq_next)
+        div_flux = self.spherical_divergence(int_uq, int_vq)
+        residual_si = dq_dt + div_flux  # implied E−P
 
-        # 3. Residual calculation (kg / m^2 / s)
-        residual_si = dq_dt + div_flux - (E_next - P_next)
-
-        # --- THE ML SCALING FIX ---
-        # Convert kg/m^2/s to mm/day. 
-        # 1 kg/m^2 of water is 1 mm depth. 1 day is 86400 seconds.
-        # This scales the loss from ~10^-5 up to ~O(1), making it visible to the optimizer.
+        # Convert to mm/day for O(1) optimizer visibility
         residual_mm_day = residual_si * 86400.0
 
-        return torch.abs(residual_mm_day).mean()
+        # Restrict to tropical band
+        residual_trop = residual_mm_day[:, :, self.trop_mask, :]
+
+        return torch.abs(residual_trop).mean()

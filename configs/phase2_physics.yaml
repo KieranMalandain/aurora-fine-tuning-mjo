@@ -1,0 +1,117 @@
+# configs/phase2_physics.yaml
+# Phase 2 Physics: auxiliary moisture-budget loss for convective conservation.
+# Inherits structure from phase1_baseline.yaml with physics loss enabled.
+
+experiment:
+  name: "phase2_physics_rollout"
+  description: "Phase 2: Aurora fine-tuning with moisture-budget physics auxiliary loss + autoregressive rollout."
+  seed: 42
+
+# ---------------------------------------------------------------------------
+# Data  (same as baseline)
+# ---------------------------------------------------------------------------
+data:
+  use_dummy: true
+
+  root: /global/cfs/cdirs/m4946/xiaoming/zm4946.MachLearn/PrcsPrep/prcs.ERA5/prcs.ERA5.Remap/Results
+
+  dummy:
+    surface_files: []
+    pressure_files: []
+    static_file: ""
+
+  real:
+    train_years: [1980, 2015]
+    val_years:   [2016, 2019]
+    test_years:  [2020, 2023]
+
+  batch_size: 1
+  num_workers: 2
+  pin_memory: true
+
+# ---------------------------------------------------------------------------
+# Model  (same as baseline)
+# ---------------------------------------------------------------------------
+model:
+  model_type: "small"
+  use_lora: false
+  lora_mode: "single"
+  gradient_checkpointing: false
+
+  surface_variables:
+    - "2t"
+    - "10u"
+    - "10v"
+    - "msl"
+    - "ttr"
+    - "tcwv"
+
+  norm_stats: {}
+
+# ---------------------------------------------------------------------------
+# Losses — PHYSICS LOSS ENABLED
+# ---------------------------------------------------------------------------
+loss:
+  # Tropical-weighted grid loss (unchanged from baseline)
+  grid:
+    enabled: true
+    tropics_bbox: [-20, 20]
+    tropics_weight: 1.0
+    extratropics_weight: 0.1
+
+  # Spectral loss (still disabled)
+  spectral:
+    enabled: false
+    weight: 0.0
+
+  # MJO head L1 loss (keep disabled unless head is wired)
+  mjo_head:
+    enabled: false
+    weight: 0.0
+
+  # Moisture-budget physics loss — ENABLED for Phase 2
+  moisture_budget:
+    enabled: true
+    weight: 0.01             # Conservative start; increase if grid loss dominates
+    tropics_bbox: [-20, 20]  # Only penalise tropical columns
+    dt_seconds: 21600        # 6-hour timestep between Aurora states
+
+# ---------------------------------------------------------------------------
+# Optimiser & Scheduler
+# ---------------------------------------------------------------------------
+training:
+  epochs: 10
+  grad_accum_steps: 1
+  max_grad_norm: 1.0
+
+  optimizer:
+    name: "adamw"
+    lr: 1.0e-4
+    weight_decay: 1.0e-5
+    betas: [0.9, 0.999]
+
+  scheduler:
+    name: "cosine"
+    warmup_steps: 100
+    eta_min: 1.0e-6
+
+  # Rollout is now enabled to test the combined behavior
+  rollout:
+    enabled: true
+    start_steps: 1
+    max_steps: 4
+    step_increase_every_n_epochs: 2
+
+# ---------------------------------------------------------------------------
+# Checkpointing & Logging
+# ---------------------------------------------------------------------------
+checkpointing:
+  save_dir: "checkpoints/phase2_physics"
+  save_every_n_epochs: 1
+  keep_last_n: 3
+
+logging:
+  log_every_n_steps: 10
+  val_every_n_epochs: 1
+  use_wandb: false
+  project: "aurora-mjo"
