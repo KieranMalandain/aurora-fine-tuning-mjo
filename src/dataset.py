@@ -20,34 +20,35 @@ _DEFAULT_NERSC_ROOT = "/global/cfs/cdirs/m4946/xiaoming/zm4946.MachLearn/PrcsPre
 # Required Aurora Pressure Levels (hPa)
 AURORA_PLEVS =[50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 850, 925, 1000]
 
-# Variable maps: {aurora_name: (step_subdir, glob_pattern)}
+# Variable maps: {aurora_name: (step_subdir, glob_pattern, native_var_name)}
 #
 # Each entry identifies:
 #   - the StepXX subdirectory under root_dir that holds the files
 #   - the glob pattern used to find per-year .nc files in that directory
+#   - the explicit internal NetCDF variable name for xarray extraction
 #
 # NOTE — msl proxy: The LANL dataset does not include mean sea-level pressure.
 # 'Ps' (surface pressure) is used as a stand-in for 'msl'.
-# TO REPLACE WITH TRUE MSL: change 'Ps' below to the actual MSL glob pattern
+# TO REPLACE WITH TRUE MSL: change the step_subdir and native_var_name to the actual MSL data
 # once those files are available. No other code change should be required.
 SURFACE_VAR_MAP = {
-    '2t':   ('Step02/ERA5.remap_180x360MODIS_6hrInst/T2',          't2*'),
-    '10u':  ('Step02/ERA5.remap_180x360MODIS_6hrInst/U10',         'u10*'),
-    '10v':  ('Step02/ERA5.remap_180x360MODIS_6hrInst/V10',         'v10*'),
-    'msl':  ('Step02/ERA5.remap_180x360MODIS_6hrInst/PS',          'Ps*'),   # MSL_PROXY: swap 'Ps*' → real msl glob when available
-    'ttr':  ('Step03/ERA5.remap_180x360MODIS_6hrInst/meanTNLWFLX', 'mtnlwrf*'),  # OLR in W/m²
-    'tcwv': ('Step02/ERA5.remap_180x360MODIS_6hrInst/tcwv',        'tcwv*'),
+    '2t':   ('Step02/ERA5.remap_180x360MODIS_6hrInst/T2',          '*', 't2'),
+    '10u':  ('Step02/ERA5.remap_180x360MODIS_6hrInst/U10',         '*', 'u10'),
+    '10v':  ('Step02/ERA5.remap_180x360MODIS_6hrInst/V10',         '*', 'v10'),
+    'msl':  ('Step02/ERA5.remap_180x360MODIS_6hrInst/PS',          '*', 'ps'),   # Temporary proxy: LANL dataset lacks MSL. Swap 'ps' → real msl var when available
+    'ttr':  ('Step03/ERA5.remap_180x360MODIS_6hrInst/meanTNLWFLX', '*', 'mtnlwrf'),  # Compatibility mapping: OLR in W/m² used for ttr
+    'tcwv': ('Step02/ERA5.remap_180x360MODIS_6hrInst/tcwv',        '*', 'tcwv'),
     # Phase-2 physics-loss variables (do not enable until baseline is stable):
-    # 'evap':   ('Step02/ERA5.remap_180x360MODIS_6hrInst/EFLX',  'EFLX*'),
-    # 'precip': ('Step06/ERA5.remap_180x360MODIS_6hrAccu/TP6H',  'tp6h*'),
+    # 'evap':   ('Step02/ERA5.remap_180x360MODIS_6hrInst/EFLX',  '*', 'EFLX'),
+    # 'precip': ('Step06/ERA5.remap_180x360MODIS_6hrAccu/TP6H',  '*', 'tp6h'),
 }
 
 ATMOS_VAR_MAP = {
-    'z': ('Step01/ERA5.remap_180x360MODIS_6hrInst/gopt', 'z*'),
-    'q': ('Step01/ERA5.remap_180x360MODIS_6hrInst/sphu', 'q*'),
-    't': ('Step01/ERA5.remap_180x360MODIS_6hrInst/tprt', 't*'),
-    'u': ('Step01/ERA5.remap_180x360MODIS_6hrInst/uWnd', 'u*'),
-    'v': ('Step01/ERA5.remap_180x360MODIS_6hrInst/vWnd', 'v*'),
+    'z': ('Step01/ERA5.remap_180x360MODIS_6hrInst/gopt', '*', 'z'),
+    'q': ('Step01/ERA5.remap_180x360MODIS_6hrInst/sphu', '*', 'q'),
+    't': ('Step01/ERA5.remap_180x360MODIS_6hrInst/tprt', '*', 't'),
+    'u': ('Step01/ERA5.remap_180x360MODIS_6hrInst/uWnd', '*', 'u'),
+    'v': ('Step01/ERA5.remap_180x360MODIS_6hrInst/vWnd', '*', 'v'),
 }
 
 class LANLMJODataset(Dataset):
@@ -85,7 +86,7 @@ class LANLMJODataset(Dataset):
         
         # 3. Filter Pressure Levels to the exact 13 Aurora requires
         # LANL data has 29 levels. We must slice them.
-        plev_coord = 'isobaricInhPa' if 'isobaricInhPa' in self.pressure_ds.coords else 'level'
+        plev_coord = 'lev' if 'lev' in self.pressure_ds.coords else ('isobaricInhPa' if 'isobaricInhPa' in self.pressure_ds.coords else 'level')
         self.pressure_ds = self.pressure_ds.sel({plev_coord: AURORA_PLEVS})
         self.atmos_levels = tuple(AURORA_PLEVS)
         
@@ -101,17 +102,17 @@ class LANLMJODataset(Dataset):
         # Note: Actual file paths will need to be globbed based on the Step00 directory
         static_dir = self.root_dir / "Step00/ERA5.invariant"
         
-        # NOTE FOR AGENT: Implement actual globbing here for the specific static files.
-        # For now, we simulate the logic.
-        try:
-            z_file = list(static_dir.glob("*_z.*.nc"))[0]
-            lsm_file = list(static_dir.glob("*_lsm.*.nc"))[0]
-            z_arr = xr.open_dataset(z_file)['z'].values
-            lsm_arr = xr.open_dataset(lsm_file)['lsm'].values
-        except IndexError:
-            # Fallback for testing if files aren't found immediately
-            z_arr = np.zeros((180, 360))
-            lsm_arr = np.zeros((180, 360))
+        z_files = list(static_dir.glob("*_z.*.nc"))
+        if not z_files:
+            raise FileNotFoundError(f"Invariant Z file not found in {static_dir}")
+        lsm_files = list(static_dir.glob("*_lsm.*.nc"))
+        if not lsm_files:
+            raise FileNotFoundError(f"Invariant LSM file not found in {static_dir}")
+            
+        with xr.open_dataset(z_files[0], engine="netcdf4") as ds_z:
+            z_arr = ds_z['Z'].values
+        with xr.open_dataset(lsm_files[0], engine="netcdf4") as ds_lsm:
+            lsm_arr = ds_lsm['LSM'].values
             
         z_tensor = self._upsample_to_aurora(torch.from_numpy(z_arr).float())
         lsm_tensor = self._upsample_to_aurora(torch.from_numpy(lsm_arr).float())
@@ -142,7 +143,7 @@ class LANLMJODataset(Dataset):
         """
         per_var_datasets: list[xr.Dataset] = []
 
-        for aurora_name, (step_subdir, glob_pattern) in var_map.items():
+        for aurora_name, (step_subdir, glob_pattern, native_name) in var_map.items():
             var_dir = self.root_dir / step_subdir
 
             # Collect files year-by-year so we stay within the requested range.
@@ -169,16 +170,16 @@ class LANLMJODataset(Dataset):
             ds_var = xr.open_mfdataset(
                 [str(f) for f in files],
                 combine="by_coords",
-                concat_dim="time",
                 engine="netcdf4",
                 parallel=True,    # dask-parallel open; actual I/O stays lazy
             )
 
             # Rename the netCDF variable (whatever LANL called it) to the
             # canonical Aurora name so __getitem__ can use a uniform key.
-            # We take whichever data variable appears first — each subdirectory
-            # is expected to hold exactly one variable.
-            native_name = next(iter(ds_var.data_vars))
+            if native_name not in ds_var.data_vars:
+                raise KeyError(f"Expected native variable '{native_name}' not found "
+                               f"in {list(ds_var.data_vars.keys())} for directory '{step_subdir}'.")
+
             if native_name != aurora_name:
                 ds_var = ds_var.rename({native_name: aurora_name})
 

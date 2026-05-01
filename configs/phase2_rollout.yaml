@@ -55,7 +55,9 @@ model:
     - "ttr"
     - "tcwv"
 
-  norm_stats: {}
+  norm_stats:
+    ttr:  { mean: -226.0498, std: 49.2158 }
+    tcwv: { mean: 18.2967,   std: 16.3265 }
 
   mjo_head:
     enabled: false
