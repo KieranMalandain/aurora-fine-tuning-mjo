@@ -20,9 +20,10 @@ experiment:
 # Data (same as phase1 by default; switch use_dummy: false on NERSC)
 # ---------------------------------------------------------------------------
 data:
-  use_dummy: true
+  use_dummy: false
 
   root: /global/cfs/cdirs/m4946/xiaoming/zm4946.MachLearn/PrcsPrep/prcs.ERA5/prcs.ERA5.Remap/Results
+  slt_path: /pscratch/sd/k/kam352/Aurora/slt/slt_data.nc
 
   dummy:
     surface_files: []

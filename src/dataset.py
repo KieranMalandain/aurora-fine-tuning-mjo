@@ -52,7 +52,7 @@ ATMOS_VAR_MAP = {
 }
 
 class LANLMJODataset(Dataset):
-    def __init__(self, start_year: int, end_year: int, root_dir: str | Path | None = None):
+    def __init__(self, start_year: int, end_year: int, root_dir: str | Path | None = None, slt_path: str | Path | None = None):
         """
         Dataset for the 1-degree NERSC/LANL ERA5 ERA5 preprocessing output.
         Handles on-the-fly upsampling to Aurora's native 0.25-degree resolution.
@@ -63,6 +63,7 @@ class LANLMJODataset(Dataset):
             root_dir:   Filesystem root of the LANL Results/ directory.
                         Pass via config['data']['root'] or the --data-root CLI flag.
                         Falls back to _DEFAULT_NERSC_ROOT with a warning if omitted.
+            slt_path:   Path to the static Soil Type data file.
         """
         if root_dir is None:
             warnings.warn(
@@ -72,6 +73,15 @@ class LANLMJODataset(Dataset):
             )
             root_dir = _DEFAULT_NERSC_ROOT
         self.root_dir = Path(root_dir)
+        
+        if slt_path is None:
+            warnings.warn(
+                "slt_path not provided; falling back to default.",
+                stacklevel=2,
+            )
+            slt_path = "/pscratch/sd/k/kam352/Aurora/slt/slt_data.nc"
+        self.slt_path = Path(slt_path)
+        
         self.start_year = start_year
         self.end_year = end_year
         
@@ -117,9 +127,15 @@ class LANLMJODataset(Dataset):
         z_tensor = self._upsample_to_aurora(torch.from_numpy(z_arr).float())
         lsm_tensor = self._upsample_to_aurora(torch.from_numpy(lsm_arr).float())
         
-        # Soil Type (slt) is missing from the LANL PDF. 
-        # We create a dummy tensor of zeros so Aurora doesn't crash.
-        slt_tensor = torch.zeros_like(z_tensor)
+        # Load Soil Type (slt) natively at 0.25-degree
+        with xr.open_dataset(self.slt_path, engine="netcdf4") as ds_slt:
+            slt_arr = ds_slt['slt'].values
+            
+        slt_tensor = torch.nan_to_num(torch.from_numpy(slt_arr).float())
+        if len(slt_tensor.shape) == 3:
+            slt_tensor = slt_tensor.squeeze(0)  # becomes (Lat, Lon)
+        slt_tensor = slt_tensor[:720, :]        # slice 721 to 720 to match Aurora grid
+        slt_tensor = slt_tensor.unsqueeze(0)    # becomes (1, 720, 1440)
         
         return {"z": z_tensor, "lsm": lsm_tensor, "slt": slt_tensor}
 
