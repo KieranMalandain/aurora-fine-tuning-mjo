@@ -55,11 +55,9 @@ model:
 
   # Normalization statistics for injected variables (ttr, tcwv).
   # Computed from *training years only*.  Leave empty to skip injection.
-  norm_stats: {}
-  # Example:
-  # norm_stats:
-  #   ttr:  { mean: -220.0, std: 50.0 }
-  #   tcwv: { mean: 25.0,   std: 15.0 }
+  norm_stats:
+    ttr:  { mean: -226.0498, std: 49.2158 }
+    tcwv: { mean: 18.2967,   std: 16.3265 }
 
 # ---------------------------------------------------------------------------
 # Losses

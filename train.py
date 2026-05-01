@@ -21,6 +21,10 @@ import random
 import sys
 from pathlib import Path
 
+# Workaround for NERSC Errno 524 filelock issue with huggingface_hub
+if "NERSC_HOST" in os.environ and "HF_HOME" not in os.environ:
+    os.environ["HF_HOME"] = f"/tmp/hf_home_{os.environ.get('USER', 'default')}"
+
 import numpy as np
 import torch
 import yaml

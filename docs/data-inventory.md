@@ -56,9 +56,10 @@ Create a machine-readable manifest for each environment:
 
 ### 1. NERSC / LANL (Primary Production Data)
 - **Path:** `/global/cfs/cdirs/m4946/xiaoming/zm4946.MachLearn/PrcsPrep/prcs.ERA5/prcs.ERA5.Remap/Results`
-- **Format:** 1-degree (180x360), 6-hourly, split into `StepXX/` subdirectories.
-- **Surface Variables Present:** `t2*` (2t), `u10*` (10u), `v10*` (10v), `Ps` (used as proxy for `msl`), `mtnlwrf` (TTR/OLR), `tcwv`.
-- **Atmos Variables Present:** `z*`, `q*`, `t*`, `u*`, `v*` (29 levels available, we slice 13).
+- **Format:** Native 1-degree (180x360), 6-hourly, split into `StepXX/` subdirectories. (Verified 1462 samples for year 1980).
+- **Surface Variables Present:** `2t`, `10u`, `10v`, `msl` (proxy using `ps`), `ttr` (proxy using `mtnlwrf`), `tcwv`. Output shape after upsampling is `[1, 720, 1440]` for each target and `[1, 2, 720, 1440]` for inputs.
+- **Atmos Variables Present:** `z`, `q`, `t`, `u`, `v` (13 levels sliced). Output shape after upsampling is `[1, 13, 720, 1440]` for each target and `[1, 2, 13, 720, 1440]` for inputs.
+- **Static Variables Present:** `z`, `lsm`, plus dummy `slt`. Output shape is `[1, 720, 1440]`. `z` and `lsm` load real physical data correctly.
 - **Preprocessing:** No pre-processed outputs exist yet. All upsampling to 0.25-degree happens dynamically in `src/dataset.py`.
 
 ### 2. Yale Grace/Bouchet (Legacy / Investigation Data)
