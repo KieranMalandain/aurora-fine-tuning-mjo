@@ -13,11 +13,12 @@ experiment:
 # ---------------------------------------------------------------------------
 data:
   # Toggle between dummy (Yale Bouchet one-month ERA5) and real (NERSC LANL)
-  use_dummy: true
+  use_dummy: false
 
   # Filesystem root of the LANL Results/ directory on NERSC.
   # Passed directly to LANLMJODataset(root_dir=...).  Ignored when use_dummy is true.
   root: /global/cfs/cdirs/m4946/xiaoming/zm4946.MachLearn/PrcsPrep/prcs.ERA5/prcs.ERA5.Remap/Results
+  slt_path: /pscratch/sd/k/kam352/Aurora/slt/slt_data.nc
 
   # Dummy dataset paths (Yale Bouchet)
   dummy:

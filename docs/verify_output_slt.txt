@@ -1,0 +1,50 @@
+Initializing dataset for year 1980...
+Initializing LANL MJO Dataset (1980-1980)...
+
+--- Dataset Initialization Successful ---
+Number of samples in year 1980: 1462
+
+--- Static Variables ---
+z: shape=torch.Size([1, 720, 1440]), mean=3709.2466, std=8216.3809
+lsm: shape=torch.Size([1, 720, 1440]), mean=0.3357, std=0.4484
+slt: shape=torch.Size([720, 1440]), mean=0.6708, std=1.1682
+
+--- Fetching first sample (index 0) ---
+
+--- Input Batch Details ---
+Initialization Time: 1980-01-01 06:00:00
+Latitude shape: torch.Size([720])
+Longitude shape: torch.Size([1440])
+Atmos Levels: (50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 850, 925, 1000)
+
+--- Input Surface Variables ---
+  2t: shape=torch.Size([1, 2, 720, 1440])
+  10u: shape=torch.Size([1, 2, 720, 1440])
+  10v: shape=torch.Size([1, 2, 720, 1440])
+  msl: shape=torch.Size([1, 2, 720, 1440])
+  ttr: shape=torch.Size([1, 2, 720, 1440])
+  tcwv: shape=torch.Size([1, 2, 720, 1440])
+
+--- Input Atmos Variables ---
+  z: shape=torch.Size([1, 2, 13, 720, 1440])
+  q: shape=torch.Size([1, 2, 13, 720, 1440])
+  t: shape=torch.Size([1, 2, 13, 720, 1440])
+  u: shape=torch.Size([1, 2, 13, 720, 1440])
+  v: shape=torch.Size([1, 2, 13, 720, 1440])
+
+--- Output Surface Variables ---
+  2t: shape=torch.Size([1, 720, 1440])
+  10u: shape=torch.Size([1, 720, 1440])
+  10v: shape=torch.Size([1, 720, 1440])
+  msl: shape=torch.Size([1, 720, 1440])
+  ttr: shape=torch.Size([1, 720, 1440])
+  tcwv: shape=torch.Size([1, 720, 1440])
+
+--- Output Atmos Variables ---
+  z: shape=torch.Size([1, 13, 720, 1440])
+  q: shape=torch.Size([1, 13, 720, 1440])
+  t: shape=torch.Size([1, 13, 720, 1440])
+  u: shape=torch.Size([1, 13, 720, 1440])
+  v: shape=torch.Size([1, 13, 720, 1440])
+
+Verification completed successfully.
