@@ -1,15 +1,16 @@
 #!/bin/bash
 #SBATCH -A m4946_g
 #SBATCH -C gpu&hbm80g
-#SBATCH -q shared
+#SBATCH -q regular
 #SBATCH -t 12:00:00
-#SBATCH -n 1
-#SBATCH -c 32
-#SBATCH --gpus-per-task=1
+#SBATCH -N 1
+#SBATCH --ntasks-per-node=4
+#SBATCH --gpus-per-node=4
+#SBATCH -c 8
 #SBATCH --mail-user=kieran.malandain@yale.edu
-#SBATCH --job-name=aurora_mjo_train
-#SBATCH --output=slurm_logs/train_%j.out
-#SBATCH --error=slurm_logs/train_%j.err
+#SBATCH --job-name=aurora_mjo_rollout
+#SBATCH --output=slurm_logs/train_rollout_%j.out
+#SBATCH --error=slurm_logs/train_rollout_%j.err
 
 # 1. Initialize Conda cleanly (bypassing NERSC global module conflicts)
 source /global/common/software/nersc/pe/conda/26.1.0/Miniforge3-25.11.0-1/etc/profile.d/conda.sh
@@ -21,11 +22,14 @@ conda activate /pscratch/sd/k/kam352/conda_envs/aurora_mjo
 export HF_HOME=/tmp/hf_home_${USER}
 export HDF5_USE_FILE_LOCKING=FALSE
 export PYTHONUNBUFFERED=1
+export MASTER_ADDR=$(hostname)
+export MASTER_PORT=29500
 
-echo "Starting Phase 1 Baseline Training..."
+echo "Starting Phase 2 Rollout+LoRA Training (4x GPU DDP)..."
+echo "Node: $(hostname), GPUs: $SLURM_GPUS_PER_NODE"
 
 # Check for latest checkpoint and resume if available
-CKPT_DIR="checkpoints/phase1_baseline"
+CKPT_DIR="checkpoints/phase2_rollout_lora"
 RESUME_FLAG=""
 if [ -d "$CKPT_DIR" ]; then
     LATEST_CKPT=$(ls -t ${CKPT_DIR}/*.pt 2>/dev/null | head -1)
@@ -35,4 +39,10 @@ if [ -d "$CKPT_DIR" ]; then
     fi
 fi
 
-srun python train.py --config configs/phase1_baseline.yaml $RESUME_FLAG
+# Launch with torchrun for DDP across 4 GPUs on 1 node
+srun torchrun \
+    --nnodes=1 \
+    --nproc_per_node=4 \
+    --rdzv_backend=c10d \
+    --rdzv_endpoint=${MASTER_ADDR}:${MASTER_PORT} \
+    train.py --config configs/phase2_rollout_lora.yaml $RESUME_FLAG

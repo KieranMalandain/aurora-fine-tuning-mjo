@@ -27,6 +27,8 @@ if "NERSC_HOST" in os.environ and "HF_HOME" not in os.environ:
 
 import numpy as np
 import torch
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
 import yaml
 
 
@@ -230,7 +232,21 @@ def main(argv=None):
     args = parse_args(argv)
 
     # ------------------------------------------------------------------
-    # 1. Config
+    # 1. DDP setup (no-op when launched without torchrun)
+    # ------------------------------------------------------------------
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    world_size = int(os.environ.get("WORLD_SIZE", 1))
+    use_ddp = world_size > 1
+
+    if use_ddp:
+        dist.init_process_group(backend="nccl")
+        torch.cuda.set_device(local_rank)
+        log.info(f"DDP initialised: rank={dist.get_rank()}/{world_size}, local_rank={local_rank}")
+
+    is_main = (not use_ddp) or (dist.get_rank() == 0)
+
+    # ------------------------------------------------------------------
+    # 2. Config
     # ------------------------------------------------------------------
     cfg = load_config(args.config)
     if args.override:
@@ -238,13 +254,13 @@ def main(argv=None):
     if args.smoke_test:
         cfg = _patch_config_for_smoke_test(cfg)
 
-    seed_everything(cfg.get("experiment", {}).get("seed", 42))
+    seed_everything(cfg.get("experiment", {}).get("seed", 42) + local_rank)
 
     # ------------------------------------------------------------------
-    # 2. Device
+    # 3. Device
     # ------------------------------------------------------------------
     if torch.cuda.is_available():
-        device = torch.device("cuda")
+        device = torch.device("cuda", local_rank)
     elif torch.backends.mps.is_available():
         device = torch.device("mps")
     else:
@@ -261,7 +277,7 @@ def main(argv=None):
     model = load_model(model_cfg, norm_stats=norm_stats)
 
     # ------------------------------------------------------------------
-    # 4. Resume from checkpoint (optional)
+    # 5. Resume from checkpoint (optional)
     # ------------------------------------------------------------------
     if args.resume:
         ckpt_path = Path(args.resume)
@@ -271,6 +287,14 @@ def main(argv=None):
         ckpt = torch.load(ckpt_path, map_location="cpu")
         model.load_state_dict(ckpt["model_state_dict"])
         log.info(f"Resumed model weights from: {ckpt_path}")
+
+    # ------------------------------------------------------------------
+    # 5b. Wrap model in DDP
+    # ------------------------------------------------------------------
+    model = model.to(device)
+    if use_ddp:
+        model = DDP(model, device_ids=[local_rank], find_unused_parameters=True)
+        log.info("Model wrapped in DistributedDataParallel")
 
     # ------------------------------------------------------------------
     # 5. Trainer
@@ -291,6 +315,7 @@ def main(argv=None):
         device=device,
         train_loader=train_loader,
         val_loader=val_loader,
+        is_main=is_main,
     )
 
     # Optional: resume optimizer state
@@ -301,13 +326,16 @@ def main(argv=None):
             log.info("Resumed optimizer state.")
 
     # ------------------------------------------------------------------
-    # 6. Train
+    # 7. Train
     # ------------------------------------------------------------------
     log.info(
         f"Starting training: experiment={cfg.get('experiment',{}).get('name','?')} "
-        f"epochs={trainer.epochs} device={device}"
+        f"epochs={trainer.epochs} device={device} world_size={world_size}"
     )
     trainer.fit()
+
+    if use_ddp:
+        dist.destroy_process_group()
     log.info("Done.")
 
 

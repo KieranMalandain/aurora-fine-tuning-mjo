@@ -27,7 +27,9 @@ from pathlib import Path
 
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
+import torch.nn.functional as F
+import torch.distributed as dist
+from torch.utils.data import DataLoader, DistributedSampler
 
 from src.loss import TropicalWeightedL1Loss, SpectralLoss, MoistureBudgetLoss
 
@@ -85,7 +87,8 @@ def _build_scheduler(optimizer, cfg: dict, steps_per_epoch: int):
 def _extract_batch_outputs(pred_batch, target_dict, device):
     """
     Given an Aurora output Batch and a target dict, return stacked
-    (pred_tensor, target_tensor) for the grid loss.
+    (pred_tensor, target_tensor) for losses that need flattened inputs
+    (e.g. spectral loss).
 
     Aurora's output Batch has .surf_vars and .atmos_vars as dicts of tensors.
     We only compare keys that exist in both pred and target.
@@ -110,6 +113,89 @@ def _extract_batch_outputs(pred_batch, target_dict, device):
     pred_tensor = torch.cat([t.reshape(t.shape[0], -1) for t in pred_parts], dim=-1)
     tgt_tensor  = torch.cat([t.reshape(t.shape[0], -1) for t in tgt_parts],  dim=-1)
     return pred_tensor, tgt_tensor
+
+
+def _align_shapes(pred_t, tgt_t):
+    """Squeeze / unsqueeze so pred and target have identical shapes.
+
+    Aurora's output often has an extra time dimension (B, 1, ...) while
+    the dataset target may lack it or vice-versa.  This helper removes
+    singleton leading dims from the larger tensor or adds them to the
+    smaller one until shapes match.
+    """
+    while pred_t.ndim > tgt_t.ndim:
+        if pred_t.shape[1] == 1:
+            pred_t = pred_t.squeeze(1)
+        else:
+            break
+    while tgt_t.ndim > pred_t.ndim:
+        if tgt_t.shape[0] == 1 or tgt_t.shape[1] == 1:
+            tgt_t = tgt_t.squeeze(0) if tgt_t.shape[0] == 1 else tgt_t.squeeze(1)
+        else:
+            break
+    return pred_t, tgt_t
+
+
+def _upsample_batch_gpu(in_batch, surf_targets, atmos_targets, device):
+    """Upsample a 1° batch + targets to 0.25° (720×1440) on GPU.
+
+    Called when the dataset returns native-resolution data.  Static vars
+    are already at 0.25° so they are left untouched.
+
+    Returns (in_batch_upsampled, target_dict) ready for the model.
+    """
+    from aurora import Batch, Metadata
+    TARGET_SIZE = (720, 1440)
+
+    def _up(t):
+        """Upsample tensor of any rank to TARGET_SIZE on the last two dims."""
+        orig = t.shape
+        if orig[-2:] == TARGET_SIZE:
+            return t  # already at target res
+        # Collapse to 4-D for F.interpolate
+        if t.ndim == 2:
+            t = t.unsqueeze(0).unsqueeze(0)
+        elif t.ndim == 3:
+            t = t.unsqueeze(0)
+        elif t.ndim == 5:
+            B, T, C, H, W = t.shape
+            t = t.reshape(B * T, C, H, W)
+        elif t.ndim == 4:
+            pass  # already (B, C, H, W)
+        else:
+            return t  # unknown rank, skip
+        t = F.interpolate(t, size=TARGET_SIZE, mode='bilinear', align_corners=False)
+        # Restore original rank
+        if len(orig) == 2:
+            return t.squeeze(0).squeeze(0)
+        elif len(orig) == 3:
+            return t.squeeze(0)
+        elif len(orig) == 5:
+            return t.reshape(orig[0], orig[1], orig[2], *TARGET_SIZE)
+        return t
+
+    # Upsample surface & atmos input vars
+    new_surf = {k: _up(v.to(device)) for k, v in in_batch.surf_vars.items()}
+    new_atmos = {k: _up(v.to(device)) for k, v in in_batch.atmos_vars.items()}
+
+    # Static vars are already at 0.25° — just move to device
+    new_static = {k: v.to(device) for k, v in in_batch.static_vars.items()}
+
+    up_batch = Batch(
+        surf_vars=new_surf,
+        atmos_vars=new_atmos,
+        static_vars=new_static,
+        metadata=in_batch.metadata,
+    )
+
+    # Upsample targets
+    target_dict = {}
+    for k, v in surf_targets.items():
+        target_dict[k] = _up(v.to(device))
+    for k, v in atmos_targets.items():
+        target_dict[k] = _up(v.to(device))
+
+    return up_batch, target_dict
 
 
 def _advance_batch(in_batch, pred_batch, step_index: int):
@@ -227,13 +313,26 @@ def build_dataloader(cfg: dict, split: str) -> DataLoader:
                     start_year=years[0],
                     end_year=years[1],
                     root_dir=data_cfg.get("root"),
+                    slt_path=data_cfg.get("slt_path"),
                 )
         from src.dataset import collate_fn as collate
+
+    # Use DistributedSampler when running under DDP
+    use_ddp = dist.is_initialized()
+    sampler = None
+    shuffle = (split == "train")
+
+    if use_ddp:
+        sampler = DistributedSampler(
+            dataset, shuffle=shuffle, drop_last=(split == "train")
+        )
+        shuffle = False  # sampler handles shuffling
 
     loader = DataLoader(
         dataset,
         batch_size=data_cfg.get("batch_size", 1),
-        shuffle=(split == "train"),
+        shuffle=shuffle,
+        sampler=sampler,
         num_workers=data_cfg.get("num_workers", 2),
         pin_memory=data_cfg.get("pin_memory", True),
         collate_fn=collate,
@@ -262,16 +361,20 @@ class Trainer:
         device: torch.device,
         train_loader=None,
         val_loader=None,
+        is_main: bool = True,
     ):
         """
         Args:
             train_loader / val_loader: Optional pre-built DataLoaders.  When
                 supplied (e.g. for smoke-tests) the Trainer skips calling
                 build_dataloader() entirely, avoiding any file-path validation.
+            is_main: True on rank 0 (or single-GPU).  Only rank 0 saves
+                checkpoints and emits step-level logs.
         """
         self.model = model.to(device)
         self.cfg = cfg
         self.device = device
+        self.is_main = is_main
 
         # ------------------------------------------------------------------
         # Build losses
@@ -372,6 +475,15 @@ class Trainer:
         self._step = 0          # global optimiser step counter
         self._saved_ckpts = []  # for keep_last_n bookkeeping
 
+        # ------------------------------------------------------------------
+        # AMP mixed precision
+        # ------------------------------------------------------------------
+        self.use_amp = train_cfg.get("use_amp", False)
+        self.amp_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        self.grad_scaler = torch.amp.GradScaler('cuda', enabled=(self.use_amp and self.amp_dtype == torch.float16))
+        if self.use_amp:
+            log.info(f"AMP enabled with dtype={self.amp_dtype}")
+
     # ------------------------------------------------------------------
     # Rollout helpers
     # ------------------------------------------------------------------
@@ -461,14 +573,30 @@ class Trainer:
                 pred_batch = model_out
                 mjo_pred   = None
 
-            # ---- Grid loss ----
+            # ---- Grid loss (per-variable, tropically weighted) ----
             if self.use_grid_loss:
-                pred_t, tgt_t = _extract_batch_outputs(
-                    pred_batch, target_dict, self.device
-                )
-                if pred_t is not None:
-                    acc["grid"] = acc["grid"] + w * self.grid_loss(pred_t, tgt_t)
-            # (if not use_grid_loss, acc["grid"] stays 0.0)
+                var_losses = []
+
+                # Surface variables
+                if hasattr(pred_batch, "surf_vars"):
+                    for var_name, pred_t in pred_batch.surf_vars.items():
+                        if var_name in target_dict:
+                            tgt_t = target_dict[var_name].to(self.device)
+                            p = pred_t.to(self.device)
+                            p, tgt_t = _align_shapes(p, tgt_t)
+                            var_losses.append(self.grid_loss(p, tgt_t))
+
+                # Atmospheric variables
+                if hasattr(pred_batch, "atmos_vars"):
+                    for var_name, pred_t in pred_batch.atmos_vars.items():
+                        if var_name in target_dict:
+                            tgt_t = target_dict[var_name].to(self.device)
+                            p = pred_t.to(self.device)
+                            p, tgt_t = _align_shapes(p, tgt_t)
+                            var_losses.append(self.grid_loss(p, tgt_t))
+
+                if var_losses:
+                    acc["grid"] = acc["grid"] + w * (sum(var_losses) / len(var_losses))
 
             # ---- Spectral loss ----
             if self.spectral_loss is not None and self.spectral_weight > 0:
@@ -529,6 +657,12 @@ class Trainer:
         epoch_loss = 0.0
         num_batches = len(self.train_loader)
 
+        # Set epoch on DistributedSampler so shuffling changes each epoch
+        if hasattr(self.train_loader, 'sampler') and isinstance(
+            self.train_loader.sampler, DistributedSampler
+        ):
+            self.train_loader.sampler.set_epoch(epoch)
+
         for batch_idx, batch in enumerate(self.train_loader):
             # Unpack -- dummy_dataset returns (in_batch, target_dict)
             # real dataset returns   (in_batch, surf_out, atmos_out)
@@ -536,30 +670,39 @@ class Trainer:
                 in_batch, target_dict = batch
             elif len(batch) == 3:
                 in_batch, surf_out, atmos_out = batch
-                # Merge surface and atmos targets into one dict
-                target_dict = {**surf_out, **atmos_out}
+                # GPU upsample if data is at native 1° resolution
+                needs_upsample = next(iter(surf_out.values())).shape[-1] < 720
+                if needs_upsample:
+                    in_batch, target_dict = _upsample_batch_gpu(
+                        in_batch, surf_out, atmos_out, self.device
+                    )
+                else:
+                    target_dict = {**surf_out, **atmos_out}
             else:
                 raise ValueError(f"Unexpected batch tuple length: {len(batch)}")
 
-            losses = self._compute_loss(in_batch, target_dict, epoch=epoch)
-            loss = losses["total"] / self.grad_accum_steps
+            with torch.amp.autocast('cuda', enabled=self.use_amp, dtype=self.amp_dtype):
+                losses = self._compute_loss(in_batch, target_dict, epoch=epoch)
+                loss = losses["total"] / self.grad_accum_steps
 
-            loss.backward()
+            self.grad_scaler.scale(loss).backward()
             epoch_loss += losses["total"].item()
 
             # Gradient accumulation
             if (batch_idx + 1) % self.grad_accum_steps == 0:
+                self.grad_scaler.unscale_(self.optimizer)
                 if self.max_grad_norm > 0:
                     nn.utils.clip_grad_norm_(
                         self.model.parameters(), self.max_grad_norm
                     )
-                self.optimizer.step()
+                self.grad_scaler.step(self.optimizer)
+                self.grad_scaler.update()
                 if self.scheduler is not None:
                     self.scheduler.step()
                 self.optimizer.zero_grad()
                 self._step += 1
 
-            if batch_idx % self.log_every == 0:
+            if batch_idx % self.log_every == 0 and self.is_main:
                 lr = self.optimizer.param_groups[0]["lr"]
                 k = self._current_rollout_steps(epoch)
                 log.info(
@@ -573,7 +716,13 @@ class Trainer:
                     f"| lr={lr:.2e}"
                 )
 
-        return epoch_loss / max(num_batches, 1)
+        # All-reduce epoch loss across ranks for consistent reporting
+        epoch_avg = epoch_loss / max(num_batches, 1)
+        if dist.is_initialized():
+            loss_tensor = torch.tensor(epoch_avg, device=self.device)
+            dist.all_reduce(loss_tensor, op=dist.ReduceOp.AVG)
+            epoch_avg = loss_tensor.item()
+        return epoch_avg
 
     # ------------------------------------------------------------------
     # Validation
@@ -597,15 +746,28 @@ class Trainer:
                 in_batch, target_dict = batch
             elif len(batch) == 3:
                 in_batch, surf_out, atmos_out = batch
-                target_dict = {**surf_out, **atmos_out}
+                needs_upsample = next(iter(surf_out.values())).shape[-1] < 720
+                if needs_upsample:
+                    in_batch, target_dict = _upsample_batch_gpu(
+                        in_batch, surf_out, atmos_out, self.device
+                    )
+                else:
+                    target_dict = {**surf_out, **atmos_out}
             else:
                 raise ValueError(f"Unexpected batch tuple length: {len(batch)}")
 
-            losses = self._compute_loss(in_batch, target_dict, epoch=epoch)
+            with torch.amp.autocast('cuda', enabled=self.use_amp, dtype=self.amp_dtype):
+                losses = self._compute_loss(in_batch, target_dict, epoch=epoch)
             val_loss += losses["total"].item()
 
         mean_val = val_loss / max(num_batches, 1)
-        log.info(f"Epoch {epoch:03d} | VAL loss={mean_val:.4f}")
+        # All-reduce val loss across ranks
+        if dist.is_initialized():
+            loss_tensor = torch.tensor(mean_val, device=self.device)
+            dist.all_reduce(loss_tensor, op=dist.ReduceOp.AVG)
+            mean_val = loss_tensor.item()
+        if self.is_main:
+            log.info(f"Epoch {epoch:03d} | VAL loss={mean_val:.4f}")
         return mean_val
 
     # ------------------------------------------------------------------
@@ -613,11 +775,15 @@ class Trainer:
     # ------------------------------------------------------------------
 
     def save_checkpoint(self, epoch: int, val_loss: float):
+        if not self.is_main:
+            return  # Only rank 0 saves
+        # Unwrap DDP wrapper to save the raw model state_dict
+        raw_model = self.model.module if hasattr(self.model, 'module') else self.model
         fname = self.save_dir / f"epoch_{epoch:03d}_val{val_loss:.4f}.pt"
         torch.save(
             {
                 "epoch": epoch,
-                "model_state_dict": self.model.state_dict(),
+                "model_state_dict": raw_model.state_dict(),
                 "optimizer_state_dict": self.optimizer.state_dict(),
                 "val_loss": val_loss,
                 "config": self.cfg,
@@ -646,7 +812,8 @@ class Trainer:
 
         for epoch in range(1, self.epochs + 1):
             train_loss = self.train_epoch(epoch)
-            log.info(f"Epoch {epoch:03d} | TRAIN loss={train_loss:.4f}")
+            if self.is_main:
+                log.info(f"Epoch {epoch:03d} | TRAIN loss={train_loss:.4f}")
 
             if epoch % self.val_every == 0:
                 val_loss = self.validate(epoch)
