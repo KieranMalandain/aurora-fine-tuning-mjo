@@ -28,3 +28,6 @@ experiment_outputs/
 
 # Legacy
 investigation_phase1/
+
+checkpoints/baseline/*
+!checkpoints/baseline/metrics.jsonl

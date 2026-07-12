@@ -1,17 +1,24 @@
 #!/usr/bin/env python3
 """
-train.py — Aurora MJO fine-tuning entry point.
+train.py Aurora MJO fine-tuning entry point (unified, resumable).
 
-Usage:
-  python train.py --config configs/phase1_baseline.yaml [--override key=value ...]
+One entry point, four modes (config overlays in configs/unified.yaml):
 
-Smoke-test (no GPU, tiny dummy data):
-  python train.py --config configs/phase1_baseline.yaml --smoke-test
+  python train.py --config configs/unified.yaml --mode baseline
+  python train.py --config configs/unified.yaml --mode physics_informed
+  python train.py --config configs/unified.yaml --mode lora
+  python train.py --config configs/unified.yaml --mode combined
 
-Override examples:
-  python train.py --config configs/phase1_baseline.yaml \
-    --override training.epochs=2 \
-    --override data.use_dummy=true
+Resume semantics:
+  --resume auto      (default) resume from the latest checkpoint in the
+                     mode's checkpointing.save_dir if one exists;
+                     otherwise start fresh (warm-starting from
+                     experiment.init_from if set for this mode).
+  --resume <path>    resume from an explicit checkpoint.
+  --resume none      always start fresh.
+
+Smoke-test (no GPU, tiny synthetic data):
+  python train.py --config configs/unified.yaml --mode baseline --smoke-test
 """
 
 import argparse
@@ -19,16 +26,44 @@ import logging
 import os
 import random
 import sys
+from copy import deepcopy
 from pathlib import Path
+
+# Workaround for NERSC Errno 524 filelock issue with huggingface_hub, and
+# make the HF cache PERSISTENT: /tmp is node-local and wiped, which forced
+# every job (x4 ranks) to re-download the pretrained weights.
+
+if "NERSC_HOST" in os.environ:
+    os.environ.setdefault("HF_HUB_DISABLE_FILE_LOCKS", "1")
+    # Backup: monkey-patch filelock just in case the env var isn't enough
+    try:
+        import filelock
+        class DummyLock:
+            def __init__(self, *args, **kwargs): pass
+            def acquire(self, *args, **kwargs): return self
+            def release(self, *args, **kwargs): pass
+            def __enter__(self): return self
+            def __exit__(self, *args, **kwargs): pass
+        filelock.FileLock = DummyLock
+    except ImportError:
+        pass
+
+    if "HF_HOME" not in os.environ:
+        scratch = os.environ.get("PSCRATCH") or os.environ.get("SCRATCH")
+        if scratch:
+            os.environ["HF_HOME"] = f"{scratch}/hf_home"
+        else:
+            os.environ["HF_HOME"] = f"/tmp/hf_home_{os.environ.get('USER', 'default')}"
+
+# Reduce CUDA allocator fragmentation — directly targets the
+# CUBLAS_STATUS_EXECUTION_FAILED (OOM-in-disguise) seen in job 52464118.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 import numpy as np
 import torch
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
 import yaml
-
-
-# ---------------------------------------------------------------------------
-# Logging
-# ---------------------------------------------------------------------------
 
 logging.basicConfig(
     level=logging.INFO,
@@ -42,39 +77,48 @@ log = logging.getLogger(__name__)
 # Config helpers
 # ---------------------------------------------------------------------------
 
-def load_config(path: str) -> dict:
-    """Load a YAML config file and return a plain dict."""
+def _deep_merge(base: dict, overlay: dict) -> dict:
+    """Recursively merge `overlay` into a copy of `base` (overlay wins)."""
+    out = deepcopy(base)
+    for k, v in (overlay or {}).items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = _deep_merge(out[k], v)
+        else:
+            out[k] = deepcopy(v)
+    return out
+
+
+def load_config(path: str, mode: str | None) -> dict:
     with open(path) as f:
-        cfg = yaml.safe_load(f)
+        raw = yaml.safe_load(f)
     log.info(f"Loaded config: {path}")
-    return cfg
+
+    if "modes" in raw:
+        modes = raw.pop("modes")
+        if mode is None:
+            raise SystemExit("--mode is required with a unified config "
+                             f"(available: {list(modes)})")
+        if mode not in modes:
+            raise SystemExit(f"Unknown mode {mode!r}; available: {list(modes)}")
+        cfg = _deep_merge(raw, modes[mode])
+        cfg.setdefault("experiment", {})["mode"] = mode
+        log.info(f"Applied mode overlay: {mode}")
+        return cfg
+    return raw  # legacy single-experiment config still works
 
 
 def apply_overrides(cfg: dict, overrides: list[str]) -> dict:
-    """
-    Apply dot-notation key=value overrides to the config dict in-place.
-
-    Example:
-        apply_overrides(cfg, ["training.epochs=5", "data.use_dummy=false"])
-    """
     for override in overrides:
         if "=" not in override:
             raise ValueError(f"Invalid override (expected key=value): {override!r}")
         key_path, raw_value = override.split("=", 1)
         keys = key_path.strip().split(".")
-
-        # Try to parse the value as YAML (handles int, float, bool, list, null)
         value = yaml.safe_load(raw_value)
-
-        # Walk into the nested dict
         node = cfg
         for k in keys[:-1]:
-            if k not in node:
-                node[k] = {}
-            node = node[k]
+            node = node.setdefault(k, {})
         node[keys[-1]] = value
         log.info(f"Override: {key_path} = {value!r}")
-
     return cfg
 
 
@@ -86,71 +130,70 @@ def seed_everything(seed: int):
         torch.cuda.manual_seed_all(seed)
 
 
+def auto_scale_memory(cfg: dict, world_size: int):
+    """Adapt memory-relevant settings to the visible GPU.
+
+    Aurora at 0.25° (720×1440) realistically caps per-GPU batch at 1, so
+    "batch scaling" is done through gradient accumulation to reach
+    training.target_effective_batch. On < 70 GB cards (or whenever rollout
+    is enabled) gradient checkpointing is forced ON — enabling it mid-run on
+    a live DDP graph, as the old code did at k>=3, is unsafe and was a
+    contributor to the cuBLAS crash.
+    """
+    tcfg = cfg.setdefault("training", {})
+    mcfg = cfg.setdefault("model", {})
+    bs = cfg.get("data", {}).get("batch_size", 1)
+
+    target_eff = int(tcfg.get("target_effective_batch", 0) or 0)
+    if target_eff:
+        accum = max(1, target_eff // max(1, world_size * bs))
+        if accum != tcfg.get("grad_accum_steps", 1):
+            log.info(f"[auto] grad_accum_steps={accum} "
+                     f"(target_eff={target_eff}, world={world_size}, bs={bs})")
+        tcfg["grad_accum_steps"] = accum
+
+    if torch.cuda.is_available():
+        total_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
+        log.info(f"[auto] GPU memory: {total_gb:.0f} GB")
+        if total_gb < 70 and not mcfg.get("gradient_checkpointing", False):
+            log.warning("[auto] <70GB GPU — forcing gradient_checkpointing=true")
+            mcfg["gradient_checkpointing"] = True
+    if tcfg.get("rollout", {}).get("enabled", False) and \
+            tcfg["rollout"].get("max_steps", 1) >= 2 and \
+            not mcfg.get("gradient_checkpointing", False):
+        log.warning("[auto] rollout enabled — forcing gradient_checkpointing=true "
+                    "(must be set BEFORE DDP wrap, never mid-run)")
+        mcfg["gradient_checkpointing"] = True
+    return cfg
+
+
 # ---------------------------------------------------------------------------
-# Smoke-test patching
+# Smoke-test patching (unchanged behaviour)
 # ---------------------------------------------------------------------------
 
-# Aurora's pretrained checkpoint only knows these four native surface variables.
-# ttr and tcwv extend the embedding layer and require norm_stats -- both are
-# intentionally excluded from the smoke-test to keep it self-contained.
 _AURORA_NATIVE_SURF_VARS = ("2t", "10u", "10v", "msl")
 
-def _patch_config_for_smoke_test(cfg: dict) -> dict:
-    """
-    Override config values for a fast smoke-test (no real data needed).
-    Uses random tensors to mimic one batch.
 
-    Key restriction: ttr and tcwv are stripped from model.surface_variables
-    so that Aurora is loaded in its unmodified pretrained form (no embedding
-    extension, no norm_stats required).
-    """
+def _patch_config_for_smoke_test(cfg: dict) -> dict:
     log.warning("SMOKE-TEST MODE: overriding config for a single synthetic step.")
     cfg["training"]["epochs"] = 1
     cfg["training"]["grad_accum_steps"] = 1
-    cfg["data"]["use_dummy"] = True          # still set; loader is injected synthetically
+    cfg["training"]["time_limit_hours"] = 0
+    cfg["data"]["use_dummy"] = True
     cfg["logging"]["log_every_n_steps"] = 1
     cfg["logging"]["val_every_n_epochs"] = 1
-    cfg["checkpointing"]["save_every_n_epochs"] = 999  # don't save during smoke
-
-    # Strip non-native vars so Aurora loads without embedding extension.
-    original = cfg.get("model", {}).get("surface_variables", list(_AURORA_NATIVE_SURF_VARS))
-    filtered = [v for v in original if v in _AURORA_NATIVE_SURF_VARS]
-    cfg["model"]["surface_variables"] = filtered
-    cfg["model"]["norm_stats"] = {}          # no norm injection needed
-    log.warning(
-        f"Smoke-test: surface_variables restricted to native Aurora vars: {filtered}"
-    )
+    cfg["checkpointing"]["save_every_n_steps"] = 10 ** 9
     return cfg
 
 
 def _install_smoke_test_loader(cfg: dict, device: torch.device):
-    """
-    Replace train/val DataLoader with a tiny synthetic loader that produces
-    one batch of random tensors shaped like dummy_dataset output.
-    Avoids any file I/O.
-
-    Surface variables are read from the (already-patched) config so they
-    exactly match what the model was built with -- in particular ttr/tcwv
-    are absent during smoke-tests.
-    """
     from aurora import Batch, Metadata
     import datetime
 
-    # Tiny spatial resolution for speed
-    H, W = 8, 16
+    H, W = 64, 128
     LEVELS = (50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 850, 925, 1000)
-    # Read surface vars from config (already stripped of ttr/tcwv by _patch_config)
-    SURF_KEYS  = tuple(cfg["model"]["surface_variables"])
+    SURF_KEYS = tuple(cfg["model"]["surface_variables"])
     ATMOS_KEYS = ("z", "u", "v", "t", "q")
-
-    def _rand_surf():
-        return {k: torch.randn(1, 1, H, W) for k in SURF_KEYS}
-
-    def _rand_atmos():
-        return {k: torch.randn(1, 1, len(LEVELS), H, W) for k in ATMOS_KEYS}
-
-    def _rand_static():
-        return {k: torch.zeros(H, W) for k in ("z", "lsm", "slt")}
 
     def _make_batch():
         init_time = datetime.datetime(2015, 1, 1, 6, 0, 0)
@@ -162,9 +205,9 @@ def _install_smoke_test_loader(cfg: dict, device: torch.device):
             rollout_step=0,
         )
         in_batch = Batch(
-            surf_vars=_rand_surf(),
-            atmos_vars=_rand_atmos(),
-            static_vars=_rand_static(),
+            surf_vars={k: torch.randn(1, 2, H, W) for k in SURF_KEYS},
+            atmos_vars={k: torch.randn(1, 2, len(LEVELS), H, W) for k in ATMOS_KEYS},
+            static_vars={k: torch.zeros(H, W) for k in ("z", "lsm", "slt")},
             metadata=meta,
         )
         target = {**{k: torch.randn(1, H, W) for k in SURF_KEYS},
@@ -186,61 +229,60 @@ def _install_smoke_test_loader(cfg: dict, device: torch.device):
 # ---------------------------------------------------------------------------
 
 def parse_args(argv=None):
-    parser = argparse.ArgumentParser(
-        description="Aurora MJO fine-tuning driver",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-    )
-    parser.add_argument(
-        "--config",
-        required=True,
-        help="Path to a YAML experiment config file.",
-    )
-    parser.add_argument(
-        "--override",
-        action="append",
-        default=[],
-        metavar="KEY=VALUE",
-        help=(
-            "Override a config key using dot-notation. "
-            "Can be specified multiple times, e.g. --override training.epochs=5"
-        ),
-    )
-    parser.add_argument(
-        "--smoke-test",
-        action="store_true",
-        help=(
-            "Run a single synthetic step to verify the pipeline compiles "
-            "and runs end-to-end.  No real data is loaded."
-        ),
-    )
-    parser.add_argument(
-        "--resume",
-        default=None,
-        metavar="CHECKPOINT",
-        help="Path to a checkpoint .pt file to resume training from.",
-    )
-    return parser.parse_args(argv)
+    p = argparse.ArgumentParser(description="Aurora MJO fine-tuning driver",
+                                formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    p.add_argument("--config", required=True, help="Path to YAML config.")
+    p.add_argument("--mode", default=None,
+                   choices=["baseline", "physics_informed", "lora", "combined"],
+                   help="Mode overlay to apply (required for unified configs).")
+    p.add_argument("--override", action="append", default=[], metavar="KEY=VALUE",
+                   help="Dot-notation config override; repeatable.")
+    p.add_argument("--smoke-test", action="store_true",
+                   help="Single synthetic step, no real data.")
+    p.add_argument("--resume", default="auto", metavar="auto|none|PATH",
+                   help="'auto' = latest ckpt in this mode's save_dir; "
+                        "'none' = fresh start; or an explicit path.")
+    return p.parse_args(argv)
 
 
 def main(argv=None):
     args = parse_args(argv)
 
     # ------------------------------------------------------------------
-    # 1. Config
+    # 1. DDP setup (no-op when launched without torchrun)
     # ------------------------------------------------------------------
-    cfg = load_config(args.config)
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    world_size = int(os.environ.get("WORLD_SIZE", 1))
+    use_ddp = world_size > 1
+
+    if use_ddp:
+        dist.init_process_group(backend="nccl")
+        torch.cuda.set_device(local_rank)
+        log.info(f"DDP initialised: rank={dist.get_rank()}/{world_size}, "
+                 f"local_rank={local_rank}")
+    is_main = (not use_ddp) or (dist.get_rank() == 0)
+
+    # A100 free performance: TF32 matmuls for any residual fp32 ops.
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+
+    # ------------------------------------------------------------------
+    # 2. Config
+    # ------------------------------------------------------------------
+    cfg = load_config(args.config, args.mode)
     if args.override:
         cfg = apply_overrides(cfg, args.override)
     if args.smoke_test:
         cfg = _patch_config_for_smoke_test(cfg)
+    cfg = auto_scale_memory(cfg, world_size)
 
-    seed_everything(cfg.get("experiment", {}).get("seed", 42))
+    seed_everything(cfg.get("experiment", {}).get("seed", 42) + local_rank)
 
     # ------------------------------------------------------------------
-    # 2. Device
+    # 3. Device
     # ------------------------------------------------------------------
     if torch.cuda.is_available():
-        device = torch.device("cuda")
+        device = torch.device("cuda", local_rank)
     elif torch.backends.mps.is_available():
         device = torch.device("mps")
     else:
@@ -248,63 +290,104 @@ def main(argv=None):
     log.info(f"Using device: {device}")
 
     # ------------------------------------------------------------------
-    # 3. Model
+    # 4. Model — rank 0 downloads the pretrained checkpoint first so the
+    #    other 3 ranks hit the (persistent) HF cache instead of racing the
+    #    network. Classic double-barrier pattern.
     # ------------------------------------------------------------------
     from src.model import load_model
 
     model_cfg = cfg.get("model", {})
     norm_stats = model_cfg.get("norm_stats") or None
+
+    if use_ddp and local_rank != 0:
+        dist.barrier()                       # wait for rank 0's download
     model = load_model(model_cfg, norm_stats=norm_stats)
+    if use_ddp and local_rank == 0:
+        dist.barrier()                       # release the other ranks
+    if use_ddp:
+        dist.barrier()                       # everyone constructed
 
     # ------------------------------------------------------------------
-    # 4. Resume from checkpoint (optional)
+    # 5. Resolve resume/warm-start BEFORE building trainer state.
+    #    Priority: explicit path > auto-latest in save_dir > init_from.
     # ------------------------------------------------------------------
-    if args.resume:
-        ckpt_path = Path(args.resume)
-        if not ckpt_path.exists():
-            log.error(f"Checkpoint not found: {ckpt_path}")
-            sys.exit(1)
-        ckpt = torch.load(ckpt_path, map_location="cpu")
-        model.load_state_dict(ckpt["model_state_dict"])
-        log.info(f"Resumed model weights from: {ckpt_path}")
+    from src.checkpoint import CheckpointManager
+
+    resume_path, warm_start_path = None, None
+    save_dir = cfg.get("checkpointing", {}).get("save_dir", "checkpoints/run")
+
+    if args.resume not in ("none",):
+        if args.resume == "auto":
+            resume_path = CheckpointManager.find_latest(save_dir)
+        else:
+            resume_path = Path(args.resume)
+            if not resume_path.exists():
+                log.error(f"Checkpoint not found: {resume_path}")
+                sys.exit(1)
+
+    if resume_path is None:
+        # No checkpoint for THIS phase yet → warm-start from a previous
+        # phase's best weights if the config asks for it, e.g.
+        #   experiment.init_from: "latest:checkpoints/physics_informed"
+        init_from = cfg.get("experiment", {}).get("init_from")
+        if init_from:
+            if str(init_from).startswith("latest:"):
+                warm_start_path = CheckpointManager.find_latest(str(init_from)[7:])
+            else:
+                warm_start_path = Path(init_from)
+            if warm_start_path is None or not Path(warm_start_path).exists():
+                log.warning(f"init_from={init_from!r} not found — training from "
+                            "pretrained Aurora weights only.")
+                warm_start_path = None
 
     # ------------------------------------------------------------------
-    # 5. Trainer
+    # 6. DDP wrap. find_unused_parameters only when the MJO head is on
+    #    (its output may be dropped from the loss).
+    # ------------------------------------------------------------------
+    model = model.to(device)
+    if use_ddp:
+        has_mjo_head = model_cfg.get("mjo_head", {}).get("enabled", False)
+        model = DDP(model, device_ids=[local_rank],
+                    find_unused_parameters=has_mjo_head,
+                    gradient_as_bucket_view=True)
+        log.info("Model wrapped in DistributedDataParallel")
+
+    # ------------------------------------------------------------------
+    # 7. Trainer + state restore
     # ------------------------------------------------------------------
     from src.trainer import Trainer
 
-    # For smoke-test: build synthetic loaders BEFORE Trainer so that
-    # __init__ never calls build_dataloader() and file-path checks are
-    # never reached.
     if args.smoke_test:
         train_loader, val_loader = _install_smoke_test_loader(cfg, device)
     else:
         train_loader, val_loader = None, None
 
-    trainer = Trainer(
-        model=model,
-        cfg=cfg,
-        device=device,
-        train_loader=train_loader,
-        val_loader=val_loader,
-    )
+    trainer = Trainer(model=model, cfg=cfg, device=device,
+                      train_loader=train_loader, val_loader=val_loader,
+                      is_main=is_main)
 
-    # Optional: resume optimizer state
-    if args.resume:
-        ckpt = torch.load(args.resume, map_location="cpu")
-        if "optimizer_state_dict" in ckpt:
-            trainer.optimizer.load_state_dict(ckpt["optimizer_state_dict"])
-            log.info("Resumed optimizer state.")
+    if resume_path is not None:
+        log.info(f"Resuming full training state from: {resume_path}")
+        trainer.load_checkpoint(resume_path, weights_only=False)
+    elif warm_start_path is not None:
+        log.info(f"Warm-starting model weights from: {warm_start_path}")
+        trainer.load_checkpoint(warm_start_path, weights_only=True)
 
     # ------------------------------------------------------------------
-    # 6. Train
+    # 8. Train
     # ------------------------------------------------------------------
     log.info(
-        f"Starting training: experiment={cfg.get('experiment',{}).get('name','?')} "
-        f"epochs={trainer.epochs} device={device}"
+        f"Starting training: experiment={cfg.get('experiment', {}).get('name', '?')} "
+        f"mode={cfg.get('experiment', {}).get('mode', '?')} "
+        f"epochs={trainer.epochs} device={device} world_size={world_size} "
+        f"start_epoch={trainer.start_epoch} global_step={trainer.global_step}"
     )
-    trainer.fit()
-    log.info("Done.")
+    exit_code = trainer.fit()
+
+    if use_ddp:
+        dist.destroy_process_group()
+    log.info(f"Done (exit code {exit_code}).")
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":

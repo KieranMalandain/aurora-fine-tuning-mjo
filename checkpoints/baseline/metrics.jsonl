@@ -1,0 +1,1 @@
+{"split": "train", "epoch": 1, "batch": 1, "step": 0, "loss": 28.144100189208984, "grid": 28.144100189208984, "spectral": 0.0, "mjo_head": 0.0, "moisture_budget": 0.0, "lr": 0.0, "rollout_k": 1, "t": 1783705308.4501503}

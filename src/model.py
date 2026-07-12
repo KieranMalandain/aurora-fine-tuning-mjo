@@ -310,6 +310,32 @@ def freeze_backbone(
                     "surf_token_embeds.weights; skipping unfreeze."
                 )
 
+    # --- Step 4 (BUG FIX): unfreeze DECODER heads of injected variables ---
+    # The decoder's per-variable output heads (backbone.decoder.surf_heads)
+    # for ttr/tcwv are also newly created and randomly initialized — the
+    # pretrained checkpoint has no entry for them (they appeared as the
+    # "missing keys" in the job-52565795 resume crash). The old code left
+    # them FROZEN at random init, so the model could never learn to predict
+    # ttr/tcwv: their grid-loss contribution was a large irreducible floor
+    # (a major part of the val loss ~1.8e4). They must train alongside the
+    # new encoder embeddings.
+    if injected_vars:
+        surf_heads = getattr(backbone.decoder, "surf_heads", None)
+        if surf_heads is not None:
+            for var in injected_vars:
+                if var in surf_heads:
+                    for p in surf_heads[var].parameters():
+                        p.requires_grad_(True)
+                    print(f"[freeze_backbone] Unfroze decoder head for '{var}'")
+                else:
+                    print(
+                        f"[freeze_backbone] WARNING: '{var}' not found in "
+                        "decoder.surf_heads; skipping unfreeze."
+                    )
+        else:
+            print("[freeze_backbone] WARNING: backbone.decoder.surf_heads "
+                  "not found; injected-variable decoder heads NOT unfrozen.")
+
 
 def _log_param_counts(model: nn.Module, label: str = "model") -> None:
     """Print a summary of trainable vs total parameter counts.
@@ -384,10 +410,10 @@ def load_model(config: dict, norm_stats: Optional[dict] = None) -> AuroraMJO:
             locations[var_name] = stats["mean"]
             scales[var_name] = stats["std"]
             print(f"   - {var_name}: mean={stats['mean']:.4f}, std={stats['std']:.4f}")
-
+    
     if config.get("gradient_checkpointing", False):
         print("Enabling gradient checkpointing")
-        backbone.configure_activation_checkpointing()
+        backbone.configure_activation_checkpointing(module_names=("Swin3DTransformerBackbone",))
 
     # ------------------------------------------------------------------
     # LoRA-aware weight freezing
