@@ -1,32 +1,47 @@
 # src/trainer.py
 """
-Trainer for Aurora MJO fine-tuning — Perlmutter production version.
+Trainer for Aurora MJO fine-tuning  - Perlmutter production version (v3).
 
-What changed vs. the previous trainer (each maps to an observed failure):
+v3 changes, each mapped to a finding in campaign-debugging-handoff.md:
 
-  * STEP-LEVEL CHECKPOINTING.  One LANL epoch is ~13.5k steps/rank (>6 h);
-    epoch-only saves meant a 12 h job could die checkpoint-less.  We now save
-    every `checkpointing.save_every_n_steps` (default 500) optimizer steps,
-    on loss plateau, at every epoch end / best-val, when the wall-clock guard
-    trips, and on SIGUSR1 from SLURM.
-  * TRUE RESUME.  epoch / global_step / batch_in_epoch / scheduler / AMP
-    scaler / RNG are all restored; the DistributedSampler shuffling is
-    deterministic in (seed, epoch), so we regenerate the same permutation and
-    skip the already-consumed indices WITHOUT touching the netCDF files.
-  * WALL-CLOCK GUARD.  `training.time_limit_hours` (set to 11.0 for a 11.5 h
-    SLURM allocation): when exceeded, all ranks agree via all_reduce, save,
-    and exit with code 99 so the chained SLURM job resumes cleanly.
-  * OOM / cuBLAS HANDLING.  Job 52464118 died with
-    CUBLAS_STATUS_EXECUTION_FAILED inside a bf16 backward — on A100 that is
-    an OOM/workspace failure in disguise.  Fixes: gradient checkpointing is
-    forced ON whenever rollout is enabled (enabling it mid-run on a live DDP
-    graph, as before, is unsafe), physics loss runs in fp32, and any
-    OOM/cuBLAS error triggers an emergency checkpoint before re-raising so
-    the job chain restarts from the last good state.
-  * GRAD-ACCUM + DDP no_sync().  Gradients are only all-reduced on the
-    boundary micro-step.
-  * JSONL METRICS every `logging.log_every_n_steps` (set 100), append-only →
-    resumable across jobs.
+  * DETACHED ROLLOUT (handoff §2  - the blocking illegal-memory-access).
+    `training.rollout.backprop: "detached"` trains multi-step rollout with
+    per-step backward + detached state advance ("pushforward" training).
+    Activation memory is O(1) in the rollout horizon k  - the same footprint
+    as single-step training (~40 GB observed)  - so ACTIVATION CHECKPOINTING
+    IS NOT NEEDED AT ALL, which sidesteps the unresolved checkpointing IMA
+    entirely. Gradients do not flow *through* time (each step treats its
+    input state as a constant), but every step is still trained on the
+    model's own predictions, which is the property that fixes rollout drift
+    and is standard practice for autoregressive weather-model fine-tuning.
+    `backprop: "full"` keeps the old whole-chain BPTT for when/if the
+    checkpointing bug is fixed (see tools/repro_ima_matrix.py).
+
+  * DDP-SAFE NON-FINITE POLICY (handoff §3a  - the `continue` guard was a
+    latent deadlock).  Skipping backward on ONE rank while others run a
+    gradient-syncing backward hangs the NCCL all-reduce.  Policy now:
+      - non-sync (no_sync / accumulation) backwards: per-rank skip is safe,
+        because only the final sync backward all-reduces the ACCUMULATED
+        gradient buckets, and rank-asymmetric contributions just average.
+      - the sync backward is guarded COLLECTIVELY: ranks all_reduce a
+        finiteness flag; a rank holding a non-finite loss backwards a
+        zero-valued surrogate that still touches every trainable parameter,
+        so DDP's reducer fires on all ranks and no one deadlocks or desyncs.
+
+  * VALIDATION FIXES (handoff §3b):
+      - all-batches-skipped now returns NaN + ERROR log (was: 0.0, which
+        `0.0 < inf` would have crowned "best" forever);
+      - `is_best` requires math.isfinite(val_loss) (NaN < best is False, so
+        best-checkpointing silently never fired);
+      - first non-finite val batch dumps per-variable input/target min/max  -
+        pinpoints WHICH variable is poisoned without a separate run;
+      - metrics.jsonl records n_ok / n_skipped;
+      - validation coverage: when training.max_val_batches is set, the val
+        loader is built over EVENLY-SPACED indices across the whole val
+        range instead of the first N chronological samples of 2016.
+
+Everything else (step-level checkpointing, resumable sampler, wall-clock
+guard, SIGUSR1, JSONL metrics, OOM emergency save) is unchanged from v2.
 """
 
 import math
@@ -40,7 +55,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributed as dist
-from torch.utils.data import DataLoader, DistributedSampler
+from torch.utils.data import DataLoader, DistributedSampler, Subset
 
 from src.loss import TropicalWeightedL1Loss, SpectralLoss, MoistureBudgetLoss
 from src.checkpoint import CheckpointManager, MetricsLogger
@@ -61,7 +76,7 @@ def _build_optimizer(model: nn.Module, cfg: dict) -> torch.optim.Optimizer:
 
     params = [p for p in model.parameters() if p.requires_grad]
     if not params:
-        raise ValueError("No trainable parameters — check freeze_backbone/use_lora config.")
+        raise ValueError("No trainable parameters  - check freeze_backbone/use_lora config.")
     if name == "adamw":
         return torch.optim.AdamW(params, lr=lr, weight_decay=wd, betas=betas)
     if name == "adam":
@@ -72,8 +87,7 @@ def _build_optimizer(model: nn.Module, cfg: dict) -> torch.optim.Optimizer:
 
 
 def _build_scheduler(optimizer, cfg: dict, optim_steps_per_epoch: int):
-    """NOTE: total steps are OPTIMIZER steps = ceil(batches / grad_accum),
-    not raw batch count — the old code overestimated by grad_accum×."""
+    """Total steps are OPTIMIZER steps = ceil(batches / grad_accum)."""
     sched_cfg = cfg["training"]["scheduler"]
     name = sched_cfg.get("name", "none").lower()
     total_epochs = cfg["training"]["epochs"]
@@ -102,7 +116,7 @@ def _build_scheduler(optimizer, cfg: dict, optim_steps_per_epoch: int):
 
 
 # ---------------------------------------------------------------------------
-# Batch plumbing helpers (unchanged behaviour, kept from original)
+# Batch plumbing helpers
 # ---------------------------------------------------------------------------
 
 def _extract_batch_outputs(pred_batch, target_dict, device):
@@ -135,7 +149,7 @@ def _align_shapes(pred_t, tgt_t):
 
 
 def _upsample_batch_gpu(in_batch, surf_targets_list, atmos_targets_list, device):
-    """Upsample a 1° batch + targets to 0.25° (720×1440) on GPU."""
+    """Upsample a 1deg batch + targets to 0.25deg (720x1440) on GPU."""
     from aurora import Batch
     TARGET_SIZE = (720, 1440)
 
@@ -184,28 +198,60 @@ def _upsample_batch_gpu(in_batch, surf_targets_list, atmos_targets_list, device)
     return up_batch, target_dict_list
 
 
-def _advance_batch(in_batch, pred_batch, step_index: int):
-    """Roll the 2-step history window forward with the model prediction."""
+# FIX 4 (AURORA_MJO_GAMEPLAN §Finding 3 / FIX 4, phase-3 LoRA rollout only):
+# `_advance_batch` splices the model's own prediction straight into the next
+# step's input history with no clamping, bypassing Aurora's built-in
+# `apply_rollout_input_clipping`. From a cold start the freshly-initialized
+# ttr/tcwv (and, post-FIX-2/6, msl) heads emit garbage; that garbage becomes
+# an OOD input for step 2, which goes non-finite. Clamp every fed-back
+# prediction to a generous physical range before it re-enters the model.
+# Bounds are physical (pre-normalization) units; tune if your convention
+# differs. Only variables present in this table are clamped - everything
+# else passes through unchanged.
+_ROLLOUT_CLAMP = {
+    "msl": (3.0e4, 1.1e5), "2t": (150., 350.), "10u": (-120., 120.), "10v": (-120., 120.),
+    "ttr": (-600., 50.), "tcwv": (0., 120.), "q": (0., 0.1),
+}
+
+
+def _clamp_fed(name, t):
+    """Clamp a fed-back rollout prediction to a sane physical range, if configured."""
+    b = _ROLLOUT_CLAMP.get(name)
+    return t.clamp(*b) if (b is not None and isinstance(t, torch.Tensor)) else t
+
+
+def _advance_batch(in_batch, pred_batch, step_index: int, detach: bool = False):
+    """Roll the 2-step history window forward with the model prediction.
+
+    detach=True severs the autograd graph at the step boundary  - required by
+    the detached-rollout mode so each step's graph can be freed immediately
+    after its own backward().
+    """
     from datetime import timedelta
     from aurora.batch import Batch, Metadata
 
     dt = timedelta(hours=6)
 
+    def _maybe_detach(t):
+        return t.detach() if (detach and isinstance(t, torch.Tensor)) else t
+
     new_surf = {}
     for k in in_batch.surf_vars:
-        history = in_batch.surf_vars[k]
+        history = _maybe_detach(in_batch.surf_vars[k])
         pred_k = pred_batch.surf_vars.get(k)
         if pred_k is not None:
-            new_surf[k] = torch.cat([history[:, 1:, ...], pred_k], dim=1)
+            fed = _clamp_fed(k, _maybe_detach(pred_k))
+            new_surf[k] = torch.cat([history[:, 1:, ...], fed], dim=1)
         else:
             new_surf[k] = torch.cat([history[:, 1:, ...], history[:, -1:, ...]], dim=1)
 
     new_atmos = {}
     for k in in_batch.atmos_vars:
-        history = in_batch.atmos_vars[k]
+        history = _maybe_detach(in_batch.atmos_vars[k])
         pred_k = pred_batch.atmos_vars.get(k)
         if pred_k is not None:
-            new_atmos[k] = torch.cat([history[:, 1:, ...], pred_k], dim=1)
+            fed = _clamp_fed(k, _maybe_detach(pred_k))
+            new_atmos[k] = torch.cat([history[:, 1:, ...], fed], dim=1)
         else:
             new_atmos[k] = torch.cat([history[:, 1:, ...], history[:, -1:, ...]], dim=1)
 
@@ -232,10 +278,9 @@ def _advance_batch(in_batch, pred_batch, step_index: int):
 class ResumableDistributedSampler(DistributedSampler):
     """DistributedSampler whose per-epoch permutation can be fast-forwarded.
 
-    DistributedSampler's shuffle depends ONLY on (seed, epoch), so after a
-    restart we regenerate the identical permutation and simply skip the first
-    `skip_samples` indices — zero wasted netCDF I/O, exact data continuity.
-    Works single-GPU too (num_replicas=1, rank=0).
+    Shuffle depends ONLY on (seed, epoch), so after a restart we regenerate
+    the identical permutation and skip the first `skip_samples` indices  -
+    zero wasted netCDF I/O, exact data continuity.  Works single-GPU too.
     """
 
     def __init__(self, *args, **kwargs):
@@ -283,6 +328,18 @@ def build_dataloader(cfg: dict, split: str) -> DataLoader:
             max_rollout_steps=max_rollout_steps,
         )
 
+    # v3: representative validation coverage.  With max_val_batches set, the
+    # old sequential loader evaluated the SAME first ~N chronological samples
+    # (~50 days of early 2016) every epoch.  Subsample evenly across the
+    # whole val range instead.
+    if split == "val":
+        world = dist.get_world_size() if dist.is_initialized() else 1
+        max_val = cfg.get("training", {}).get("max_val_batches", None)
+        if max_val is not None and len(dataset) > max_val * world:
+            idx = torch.linspace(0, len(dataset) - 1, steps=max_val * world).round().long()
+            idx = torch.unique(idx)
+            dataset = Subset(dataset, idx.tolist())
+
     world = dist.get_world_size() if dist.is_initialized() else 1
     rank = dist.get_rank() if dist.is_initialized() else 0
     sampler = ResumableDistributedSampler(
@@ -298,7 +355,7 @@ def build_dataloader(cfg: dict, split: str) -> DataLoader:
     return DataLoader(
         dataset,
         batch_size=data_cfg.get("batch_size", 1),
-        shuffle=False,                      # sampler owns the shuffle
+        shuffle=False,
         sampler=sampler,
         num_workers=num_workers,
         pin_memory=data_cfg.get("pin_memory", True),
@@ -315,8 +372,6 @@ def build_dataloader(cfg: dict, split: str) -> DataLoader:
 class Trainer:
     """Trains an Aurora-based MJO model with production checkpoint/resume."""
 
-    # exit code the SLURM chain script interprets as "timed out cleanly,
-    # checkpoint written, please resume in the next job"
     EXIT_TIMEOUT = 99
 
     def __init__(self, model, cfg, device, train_loader=None, val_loader=None,
@@ -391,10 +446,8 @@ class Trainer:
         self.max_grad_norm = train_cfg.get("max_grad_norm", 1.0)
         self.log_every = cfg.get("logging", {}).get("log_every_n_steps", 100)
         self.val_every = cfg.get("logging", {}).get("val_every_n_epochs", 1)
-        # cap epoch length so one epoch fits the SLURM window (None = full)
         self.max_steps_per_epoch = train_cfg.get("max_steps_per_epoch", None)
         self.max_val_batches = train_cfg.get("max_val_batches", None)
-        # wall-clock guard: 11.0 h inside a 11.5 h allocation → 30 min buffer
         self.time_limit_s = float(train_cfg.get("time_limit_hours", 0) or 0) * 3600.0
         self._t_start = time.time()
 
@@ -404,7 +457,7 @@ class Trainer:
         self.scheduler = _build_scheduler(self.optimizer, cfg, optim_steps_per_epoch)
 
         # ------------------------------------------------------------------
-        # Checkpointing (step-level) + metrics
+        # Checkpointing + metrics
         # ------------------------------------------------------------------
         ckpt_cfg = cfg.get("checkpointing", {})
         self.save_dir = Path(ckpt_cfg.get("save_dir", "checkpoints/run"))
@@ -425,16 +478,28 @@ class Trainer:
         self.rollout_max = max(self.rollout_start, rollout_cfg.get("max_steps", 1))
         self.rollout_incr_every = max(1, rollout_cfg.get("step_increase_every_n_epochs", 2))
         self.rollout_weighting = rollout_cfg.get("step_loss_weighting", "uniform")
+        # v3: "detached" (per-step backward, O(1) memory, no checkpointing
+        # needed) or "full" (whole-chain BPTT, requires checkpointing at k>=2).
+        self.rollout_backprop = rollout_cfg.get("backprop", "full").lower()
+        if self.rollout_enabled:
+            log.info(f"Rollout enabled: backprop={self.rollout_backprop} "
+                     f"k={self.rollout_start}->{self.rollout_max}")
 
         # ------------------------------------------------------------------
-        # Resume counters (populated by load_checkpoint / train.py)
+        # Resume counters
         # ------------------------------------------------------------------
-        self.global_step = 0        # optimizer steps completed, all epochs
-        self.start_epoch = 1        # epoch to (re)start in
-        self.resume_batch_offset = 0  # batches already consumed in start_epoch
+        self.global_step = 0
+        self.start_epoch = 1
+        self.resume_batch_offset = 0
         self.best_val = float("inf")
-        self._loss_hist: list[float] = []   # for plateau detection
+        self._loss_hist: list[float] = []
         self._steps_since_save = 0
+        self._nonfinite_train_batches = 0
+        # FIX 1 (AURORA_MJO_GAMEPLAN §Finding 2 / FIX 1): counts optimizer
+        # steps skipped because gradients were non-finite even though the
+        # loss itself was finite (the bf16-attention corruption path that
+        # otherwise poisons Adam's moment buffers forever).
+        self._nonfinite_grad_steps = 0
 
         # ------------------------------------------------------------------
         # AMP
@@ -447,23 +512,18 @@ class Trainer:
         if self.use_amp:
             log.info(f"AMP enabled with dtype={self.amp_dtype}")
 
-        # ------------------------------------------------------------------
-        # SIGUSR1 → graceful save+exit (backup to the wall-clock guard;
-        # SLURM sends it via `#SBATCH --signal=B:USR1@1800`).
-        # ------------------------------------------------------------------
         self._usr1 = False
         try:
             signal.signal(signal.SIGUSR1, self._on_usr1)
         except (ValueError, OSError):
-            pass  # non-main thread / unsupported platform
+            pass
 
     # ------------------------------------------------------------------
     def _on_usr1(self, signum, frame):
-        log.warning("SIGUSR1 received (SLURM timeout warning) — will checkpoint & exit.")
+        log.warning("SIGUSR1 received (SLURM timeout warning)  - will checkpoint & exit.")
         self._usr1 = True
 
     def _should_stop_for_time(self) -> bool:
-        """Local decision only; must be all-reduced before acting (DDP)."""
         if self._usr1:
             return True
         if self.time_limit_s > 0 and (time.time() - self._t_start) > self.time_limit_s:
@@ -471,7 +531,6 @@ class Trainer:
         return False
 
     def _sync_stop_flag(self, local_stop: bool) -> bool:
-        """All ranks must agree on stopping or DDP collectives deadlock."""
         if not dist.is_initialized():
             return local_stop
         t = torch.tensor([1.0 if local_stop else 0.0], device=self.device)
@@ -479,11 +538,74 @@ class Trainer:
         return bool(t.item() > 0)
 
     # ------------------------------------------------------------------
+    # DDP-safe non-finite machinery (v3)
+    # ------------------------------------------------------------------
+
+    def _collective_all_finite(self, local_finite: bool) -> bool:
+        """True iff EVERY rank's loss is finite.  Must be called by all ranks
+        the same number of times (we call it exactly once per sync backward)."""
+        if not dist.is_initialized():
+            return local_finite
+        t = torch.tensor([1.0 if local_finite else 0.0], device=self.device)
+        dist.all_reduce(t, op=dist.ReduceOp.MIN)
+        return bool(t.item() > 0.5)
+
+    def _surrogate_sync_backward(self):
+        """Zero-valued backward that touches every trainable parameter.
+
+        Used on a rank whose loss is non-finite during the GRADIENT-SYNCING
+        backward: DDP's reducer needs a backward pass on every rank to fire
+        its bucket hooks, or the other ranks deadlock in all-reduce.  This
+        surrogate contributes exactly zero gradient while keeping the
+        collective aligned, and the all-reduced (accumulated) gradients stay
+        identical on all ranks afterwards.
+        """
+        z = None
+        for p in self.model.parameters():
+            if p.requires_grad:
+                term = p.float().sum()
+                z = term if z is None else z + term
+        if z is not None:
+            (z * 0.0).backward()
+
+    def _guarded_backward(self, loss: torch.Tensor, is_sync: bool,
+                          context: str, epoch: int, batch_in_epoch: int) -> bool:
+        """Backward `loss` with the v3 non-finite policy.
+
+        Returns True if a real (non-surrogate) backward ran.
+        """
+        finite = bool(torch.isfinite(loss).item())
+        if is_sync:
+            if self._collective_all_finite(finite):
+                self.grad_scaler.scale(loss).backward()
+                return True
+            # Someone (possibly us) is non-finite on the sync pass.
+            if not finite:
+                self._nonfinite_train_batches += 1
+                log.warning(f"[nan-guard] non-finite loss at epoch {epoch} "
+                            f"batch {batch_in_epoch} ({context}, sync pass)  - "
+                            f"surrogate backward on this rank.")
+                self._surrogate_sync_backward()
+            else:
+                # Our loss is fine, another rank's is not: run the real
+                # backward  - asymmetric contributions are safe because the
+                # all-reduce output is identical on every rank.
+                self.grad_scaler.scale(loss).backward()
+            return finite
+        # Non-sync (no_sync/accumulation) pass: per-rank skip is safe.
+        if finite:
+            self.grad_scaler.scale(loss).backward()
+            return True
+        self._nonfinite_train_batches += 1
+        log.warning(f"[nan-guard] non-finite loss at epoch {epoch} "
+                    f"batch {batch_in_epoch} ({context}, no-sync pass)  - skipped.")
+        return False
+
+    # ------------------------------------------------------------------
     # Resume
     # ------------------------------------------------------------------
 
     def load_checkpoint(self, path, weights_only: bool = False):
-        """Restore full trainer state from `path` (see CheckpointManager.load)."""
         counters = CheckpointManager.load(
             path, self.model, self.optimizer, self.scheduler, self.grad_scaler,
             weights_only_model=weights_only,
@@ -493,7 +615,8 @@ class Trainer:
             self.best_val = counters["best_val"]
             self.start_epoch = max(1, counters["epoch"])
             self.resume_batch_offset = counters["batch_in_epoch"]
-            # If we stopped exactly at an epoch boundary, advance.
+            self._nonfinite_train_batches = counters.get("nonfinite_train_batches", 0)
+            self._nonfinite_grad_steps = counters.get("nonfinite_grad_steps", 0)
             epoch_len = self.max_steps_per_epoch or len(self.train_loader)
             if self.resume_batch_offset >= epoch_len:
                 self.start_epoch += 1
@@ -518,7 +641,58 @@ class Trainer:
         return [1.0 / k] * k
 
     # ------------------------------------------------------------------
-    # Forward + loss (logic unchanged; physics loss internally fixed in loss.py)
+    # Per-step loss (shared by full-BPTT, detached, and validation paths)
+    # ------------------------------------------------------------------
+
+    def _single_step_losses(self, current_batch, target_dict) -> tuple[dict, object]:
+        """One forward pass + all component losses for ONE rollout step.
+
+        Returns (losses_dict_of_tensors_unweighted, pred_batch).
+        """
+        model_out = self.model(current_batch)
+        if isinstance(model_out, tuple):
+            pred_batch, mjo_pred = model_out
+        else:
+            pred_batch, mjo_pred = model_out, None
+
+        zero = torch.zeros((), device=self.device)
+        out = {"grid": zero, "spectral": zero, "mjo_head": zero, "moisture_budget": zero}
+
+        if self.use_grid_loss:
+            var_losses = []
+            for attr in ("surf_vars", "atmos_vars"):
+                if hasattr(pred_batch, attr):
+                    for var_name, pred_t in getattr(pred_batch, attr).items():
+                        if var_name in target_dict:
+                            tgt_t = target_dict[var_name].to(self.device).float()
+                            p = pred_t.to(self.device).float()
+                            p, tgt_t = _align_shapes(p, tgt_t)
+                            var_losses.append(self.grid_loss(p, tgt_t))
+            if var_losses:
+                out["grid"] = sum(var_losses) / len(var_losses)
+
+        if self.spectral_loss is not None and self.spectral_weight > 0:
+            pred_t, tgt_t = _extract_batch_outputs(pred_batch, target_dict, self.device)
+            if pred_t is not None:
+                out["spectral"] = self.spectral_weight * self.spectral_loss(pred_t, tgt_t)
+
+        if self.use_mjo_head_loss and mjo_pred is not None and "mjo_targets" in target_dict:
+            out["mjo_head"] = self.mjo_head_weight * nn.functional.l1_loss(
+                mjo_pred.to(self.device), target_dict["mjo_targets"].to(self.device))
+
+        if self.moisture_budget_loss is not None:
+            out["moisture_budget"] = self.moisture_budget_weight * \
+                self.moisture_budget_loss(current_batch, pred_batch)
+
+        return out, pred_batch
+
+    def _select_target(self, target_dict_list, step_idx: int) -> dict:
+        if isinstance(target_dict_list, dict):
+            return target_dict_list
+        return target_dict_list[min(step_idx, len(target_dict_list) - 1)]
+
+    # ------------------------------------------------------------------
+    # Full-BPTT composite loss (validation + rollout.backprop == "full")
     # ------------------------------------------------------------------
 
     def _compute_loss(self, in_batch, target_dict_list, epoch: int = 1) -> dict:
@@ -529,46 +703,10 @@ class Trainer:
 
         for step_idx in range(k):
             w = weights[step_idx]
-            if isinstance(target_dict_list, dict):
-                target_dict = target_dict_list
-            else:
-                target_dict = target_dict_list[min(step_idx, len(target_dict_list) - 1)]
-
-            model_out = self.model(current_batch)
-            if isinstance(model_out, tuple):
-                pred_batch, mjo_pred = model_out
-            else:
-                pred_batch, mjo_pred = model_out, None
-
-            if self.use_grid_loss:
-                var_losses = []
-                for attr in ("surf_vars", "atmos_vars"):
-                    if hasattr(pred_batch, attr):
-                        for var_name, pred_t in getattr(pred_batch, attr).items():
-                            if var_name in target_dict:
-                                tgt_t = target_dict[var_name].to(self.device).float()
-                                p = pred_t.to(self.device).float()
-                                p, tgt_t = _align_shapes(p, tgt_t)
-                                var_losses.append(self.grid_loss(p, tgt_t))
-                if var_losses:
-                    acc["grid"] = acc["grid"] + w * (sum(var_losses) / len(var_losses))
-
-            if self.spectral_loss is not None and self.spectral_weight > 0:
-                pred_t, tgt_t = _extract_batch_outputs(pred_batch, target_dict, self.device)
-                if pred_t is not None:
-                    acc["spectral"] = acc["spectral"] + \
-                        w * self.spectral_weight * self.spectral_loss(pred_t, tgt_t)
-
-            if self.use_mjo_head_loss and mjo_pred is not None and "mjo_targets" in target_dict:
-                mjo_l1 = nn.functional.l1_loss(
-                    mjo_pred.to(self.device), target_dict["mjo_targets"].to(self.device))
-                acc["mjo_head"] = acc["mjo_head"] + w * self.mjo_head_weight * mjo_l1
-
-            if self.moisture_budget_loss is not None:
-                mb = self.moisture_budget_loss(current_batch, pred_batch)
-                acc["moisture_budget"] = acc["moisture_budget"] + \
-                    w * self.moisture_budget_weight * mb
-
+            target_dict = self._select_target(target_dict_list, step_idx)
+            step_losses, pred_batch = self._single_step_losses(current_batch, target_dict)
+            for name in acc:
+                acc[name] = acc[name] + w * step_losses[name]
             if step_idx < k - 1:
                 current_batch = _advance_batch(current_batch, pred_batch, step_idx)
 
@@ -580,11 +718,68 @@ class Trainer:
         return losses
 
     # ------------------------------------------------------------------
-    # Batch normalisation helper
+    # Detached rollout: per-step backward, O(1) activation memory in k.
+    # ------------------------------------------------------------------
+
+    def _detached_rollout_step(self, in_batch, target_dict_list, epoch: int,
+                               is_boundary: bool, batch_in_epoch: int) -> dict:
+        """Train one micro-batch with detached ("pushforward") rollout.
+
+        For each rollout step j:
+          forward -> per-step loss -> BACKWARD IMMEDIATELY (freeing step j's
+          graph) -> advance state with DETACHED predictions.
+
+        DDP context discipline: every backward except the LAST rollout step
+        of a BOUNDARY micro-batch runs under no_sync(); the last one is the
+        gradient-syncing pass and is guarded collectively.  Because DDP
+        reduces the ACCUMULATED per-parameter gradients on the sync pass,
+        the k per-step backwards accumulate exactly like grad-accum
+        micro-steps do.
+
+        Returns a dict of float loss components (for logging).
+        """
+        k = self._current_rollout_steps(epoch)
+        weights = self._step_weights(k)
+        is_ddp = hasattr(self.model, "no_sync")
+        items = {"grid": 0.0, "spectral": 0.0, "mjo_head": 0.0,
+                 "moisture_budget": 0.0, "total": 0.0}
+
+        current_batch = in_batch
+        for step_idx in range(k):
+            is_sync = is_boundary and (step_idx == k - 1)
+            sync_ctx = self.model.no_sync() if (is_ddp and not is_sync) \
+                else contextlib.nullcontext()
+            with sync_ctx:
+                with torch.amp.autocast('cuda', enabled=self.use_amp, dtype=self.amp_dtype):
+                    step_losses, pred_batch = self._single_step_losses(
+                        current_batch, self._select_target(target_dict_list, step_idx))
+                    step_total = sum(step_losses.values())
+                    scaled = step_total * (weights[step_idx] / self.grad_accum_steps)
+                self._guarded_backward(scaled, is_sync,
+                                       context=f"detached k={step_idx+1}/{k}",
+                                       epoch=epoch, batch_in_epoch=batch_in_epoch)
+
+            # Logging accumulation (weighted, NaN-sanitized for display only).
+            for name, v in step_losses.items():
+                val = float(v.detach().item())
+                if math.isfinite(val):
+                    items[name] += weights[step_idx] * val
+            tot = float(step_total.detach().item())
+            if math.isfinite(tot):
+                items["total"] += weights[step_idx] * tot
+
+            # Advance with the graph CUT  - this is what frees step j's
+            # activations and keeps memory flat in k.
+            if step_idx < k - 1:
+                current_batch = _advance_batch(current_batch, pred_batch,
+                                               step_idx, detach=True)
+        return items
+
+    # ------------------------------------------------------------------
+    # Batch prep
     # ------------------------------------------------------------------
 
     def _prep_batch(self, batch):
-        """Unpack, upsample if needed, move to device, force fp32+contiguous."""
         if len(batch) == 2:
             in_batch, target_dict_list = batch
         elif len(batch) == 3:
@@ -611,14 +806,10 @@ class Trainer:
     # ------------------------------------------------------------------
 
     def _maybe_step_checkpoint(self, epoch: int, batch_in_epoch: int):
-        """Save every `save_every_steps` optimizer steps OR on loss plateau."""
         if not self.is_main:
             return
         due_steps = self._steps_since_save >= self.save_every_steps
         due_plateau = False
-        # Plateau: relative change of mean loss between the two most recent
-        # half-windows below plateau_rel_delta → the model has settled;
-        # snapshot it so a crash costs nothing.
         n = self.plateau_window
         if not due_steps and len(self._loss_hist) >= 2 * n and self._steps_since_save >= n:
             prev = sum(self._loss_hist[-2 * n:-n]) / n
@@ -635,6 +826,8 @@ class Trainer:
             tag, self.model, self.optimizer, self.scheduler, self.grad_scaler,
             epoch=epoch, global_step=self.global_step, batch_in_epoch=batch_in_epoch,
             best_val=self.best_val, val_loss=val_loss, config=self.cfg, is_best=is_best,
+            nonfinite_train_batches=self._nonfinite_train_batches,
+            nonfinite_grad_steps=self._nonfinite_grad_steps,
         )
         if reason:
             log.info(f"[ckpt] trigger: {reason}")
@@ -652,15 +845,16 @@ class Trainer:
         loader = self.train_loader
         sampler = getattr(loader, "sampler", None)
         if isinstance(sampler, DistributedSampler):
-            sampler.set_epoch(epoch)  # per-epoch reshuffle
+            sampler.set_epoch(epoch)
         if isinstance(sampler, ResumableDistributedSampler):
-            # CRITICAL RESUME STEP: same (seed, epoch) → same permutation;
-            # skip exactly the batches already consumed before the restart.
             sampler.skip_samples = skip_batches * loader.batch_size
 
-        epoch_len = len(loader) + skip_batches           # nominal full length
+        epoch_len = len(loader) + skip_batches
         if self.max_steps_per_epoch is not None:
             epoch_len = min(epoch_len, self.max_steps_per_epoch)
+
+        k = self._current_rollout_steps(epoch)
+        use_detached = (self.rollout_enabled and self.rollout_backprop == "detached")
 
         epoch_loss, seen = 0.0, 0
         batch_in_epoch = skip_batches
@@ -677,32 +871,35 @@ class Trainer:
             try:
                 in_batch, target_dict_list = self._prep_batch(batch)
 
-                # DDP no_sync on non-boundary micro-steps: skip the (very
-                # expensive at 0.25°) gradient all-reduce until we step.
-    
-                sync_ctx = self.model.no_sync() if (is_ddp and not is_boundary) \
-                    else contextlib.nullcontext()
-                with sync_ctx:
-                    with torch.amp.autocast('cuda', enabled=self.use_amp, dtype=self.amp_dtype):
-                        losses = self._compute_loss(in_batch, target_dict_list, epoch=epoch)
-                        loss = losses["total"] / self.grad_accum_steps
-                    
-                    if not torch.isfinite(losses["total"]):
-                        ts = getattr(in_batch.metadata, "time", ("?",))[0]
-                        log.warning(f"[nan-guard] non-finite loss at epoch {epoch} batch {batch_in_epoch} "
-                                    f"time={ts} (grid={losses['grid'].item():.4g}); skipping this micro-batch.")
-                        continue
-
-                    self.grad_scaler.scale(loss).backward()
+                if use_detached:
+                    # Detached path manages its own no_sync per rollout step.
+                    items = self._detached_rollout_step(
+                        in_batch, target_dict_list, epoch, is_boundary, batch_in_epoch)
+                    losses_view = items
+                    step_loss = items["total"]
+                else:
+                    sync_ctx = self.model.no_sync() if (is_ddp and not is_boundary) \
+                        else contextlib.nullcontext()
+                    with sync_ctx:
+                        with torch.amp.autocast('cuda', enabled=self.use_amp,
+                                                dtype=self.amp_dtype):
+                            losses = self._compute_loss(in_batch, target_dict_list,
+                                                        epoch=epoch)
+                            loss = losses["total"] / self.grad_accum_steps
+                        self._guarded_backward(loss, is_boundary, context="full",
+                                               epoch=epoch, batch_in_epoch=batch_in_epoch)
+                    losses_view = {n: float(v.detach().item()) for n, v in losses.items()}
+                    step_loss = losses_view["total"]
 
             except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
                 msg = str(e)
-                if "out of memory" in msg.lower() or "cublas" in msg.lower() or "illegal memory access" in msg.lower():
-                    log.error(f"GPU memory/cuBLAS failure at epoch {epoch} "
-                            f"batch {batch_in_epoch}: {msg[:300]}")
+                if "out of memory" in msg.lower() or "cublas" in msg.lower() \
+                        or "illegal memory access" in msg.lower():
+                    log.error(f"GPU memory/CUDA failure at epoch {epoch} "
+                              f"batch {batch_in_epoch}: {msg[:300]}")
                     try:
                         self._save(f"emergency_step_{self.global_step:07d}",
-                                epoch, batch_in_epoch - 1, reason="OOM/CUBLAS")
+                                   epoch, batch_in_epoch - 1, reason="OOM/CUDA")
                     except Exception as save_err:
                         log.error(f"Emergency checkpoint save ALSO failed: {save_err}")
                     try:
@@ -711,31 +908,60 @@ class Trainer:
                         pass
                 raise
 
-            step_loss = losses["total"].item()
-            epoch_loss += step_loss
-            seen += 1
-            self._loss_hist.append(step_loss)
-            if len(self._loss_hist) > 4 * self.plateau_window:
-                self._loss_hist = self._loss_hist[-2 * self.plateau_window:]
+            if math.isfinite(step_loss):
+                epoch_loss += step_loss
+                seen += 1
+                self._loss_hist.append(step_loss)
+                if len(self._loss_hist) > 4 * self.plateau_window:
+                    self._loss_hist = self._loss_hist[-2 * self.plateau_window:]
 
             if is_boundary:
-                self.grad_scaler.unscale_(self.optimizer)
-                if self.max_grad_norm > 0:
-                    nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
-                self.grad_scaler.step(self.optimizer)
-                self.grad_scaler.update()
-                if self.scheduler is not None:
-                    self.scheduler.step()
+                self.grad_scaler.unscale_(self.optimizer)  # no-op under bf16, harmless
+
+                # --- FIX 1: reject non-finite gradients before they poison
+                # Adam's moment buffers. A finite loss can still produce
+                # non-finite gradients (saturated bf16 attention softmax ->
+                # finite activation, NaN in its Jacobian); clip_grad_norm_
+                # alone does NOT catch this because a NaN total norm just
+                # propagates through the clip without raising. Without this
+                # guard, one bad batch corrupts Adam's m/v buffers forever
+                # (they update *before* the lr multiply, so this happens
+                # even at lr≈0 during warmup) and every subsequent step and
+                # forward pass goes NaN.
+                local_finite = True
+                for p in self.model.parameters():
+                    if p.grad is not None and not torch.isfinite(p.grad).all():
+                        local_finite = False
+                        break
+                # Collective so all DDP ranks step-or-skip together.
+                grads_finite = self._collective_all_finite(local_finite)
+
+                if grads_finite:
+                    if self.max_grad_norm > 0:
+                        nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
+                    self.grad_scaler.step(self.optimizer)
+                    self.grad_scaler.update()
+                    if self.scheduler is not None:
+                        self.scheduler.step()
+                else:
+                    self._nonfinite_grad_steps += 1
+                    if self.is_main:
+                        log.warning(
+                            f"[grad-guard] non-finite grads at step {self.global_step} "
+                            f"(epoch {epoch} batch {batch_in_epoch}) - optimizer step "
+                            f"skipped (total={self._nonfinite_grad_steps})."
+                        )
+                    # Do NOT step optimizer or scheduler; just clear the
+                    # poisoned grads below and move on.
+
                 self.optimizer.zero_grad(set_to_none=True)
                 self.global_step += 1
                 self._steps_since_save += 1
 
-                # ---- step-based / plateau checkpoint --------------------
                 self._maybe_step_checkpoint(epoch, batch_in_epoch)
 
-                # ---- synchronized timeout check (once per optim step) ----
                 if self._sync_stop_flag(self._should_stop_for_time()):
-                    log.warning("Wall-clock guard tripped — saving final state.")
+                    log.warning("Wall-clock guard tripped  - saving final state.")
                     self._save(f"step_{self.global_step:07d}", epoch, batch_in_epoch,
                                reason="time-limit")
                     if dist.is_initialized():
@@ -745,29 +971,33 @@ class Trainer:
 
             if (batch_in_epoch % self.log_every == 0 or batch_in_epoch == 1) and self.is_main:
                 lr = self.optimizer.param_groups[0]["lr"]
-                k = self._current_rollout_steps(epoch)
                 elapsed = time.time() - self._t_start
                 log.info(
                     f"Epoch {epoch:03d} | batch {batch_in_epoch:05d}/{epoch_len} "
-                    f"| step {self.global_step} | rollout_k={k} "
+                    f"| step {self.global_step} | rollout_k={k}"
+                    f"{'(det)' if use_detached else ''} "
                     f"| loss={step_loss:.4f} "
-                    f"(grid={losses['grid'].item():.4f}, "
-                    f"spec={losses['spectral'].item():.4f}, "
-                    f"mjo={losses['mjo_head'].item():.4f}, "
-                    f"phys={losses['moisture_budget'].item():.4f}) "
-                    f"| lr={lr:.2e} | t={elapsed/3600:.2f}h"
+                    f"(grid={losses_view['grid']:.4f}, "
+                    f"spec={losses_view['spectral']:.4f}, "
+                    f"mjo={losses_view['mjo_head']:.4f}, "
+                    f"phys={losses_view['moisture_budget']:.4f}) "
+                    f"| lr={lr:.2e} | t={elapsed/3600:.2f}h "
+                    f"| nan_skipped={self._nonfinite_train_batches} "
+                    f"| grad_skipped={self._nonfinite_grad_steps}"
                 )
                 self.metrics.log({
                     "split": "train", "epoch": epoch, "batch": batch_in_epoch,
                     "step": self.global_step, "loss": step_loss,
-                    "grid": losses["grid"].item(),
-                    "spectral": losses["spectral"].item(),
-                    "mjo_head": losses["mjo_head"].item(),
-                    "moisture_budget": losses["moisture_budget"].item(),
-                    "lr": lr, "rollout_k": self._current_rollout_steps(epoch),
+                    "grid": losses_view["grid"],
+                    "spectral": losses_view["spectral"],
+                    "mjo_head": losses_view["mjo_head"],
+                    "moisture_budget": losses_view["moisture_budget"],
+                    "lr": lr, "rollout_k": k,
+                    "detached": use_detached,
+                    "nan_skipped_total": self._nonfinite_train_batches,
+                    "nonfinite_grad_steps_total": self._nonfinite_grad_steps,
                 })
 
-        # reset skip so later epochs iterate fully
         if isinstance(sampler, ResumableDistributedSampler):
             sampler.skip_samples = 0
 
@@ -783,32 +1013,92 @@ class Trainer:
     # ------------------------------------------------------------------
 
     @torch.no_grad()
+    def _log_bad_val_batch(self, in_batch, target_dict_list):
+        """Per-variable input/target/PREDICTION ranges for the first non-finite
+        val batch  - identifies WHICH variable is poisoned without a separate
+        debug run.
+
+        FIX 3 (AURORA_MJO_GAMEPLAN §Finding 4): the previous version logged
+        only surf inputs, q/t atmos inputs, and targets  - never z/u/v, never
+        statics, and critically never the model's own prediction, which is
+        the tensor that actually goes NaN. We now run one extra forward pass
+        here and log every surf/atmos prediction variable so FIX 1-2 can be
+        *confirmed* (expect: no PRED.* non-finite) rather than assumed.
+        """
+        def rng(t):
+            t = t.float()
+            fin = torch.isfinite(t)
+            tag = "" if fin.all() else f" NON-FINITE({int((~fin).sum())})"
+            v = t[fin]
+            return (f"[{v.min():.3e}, {v.max():.3e}]{tag}" if v.numel() else "[empty]")
+
+        lines = []
+        # Inputs: ALL surface + ALL atmos (not just q, t).
+        for name, t in in_batch.surf_vars.items():
+            lines.append(f"in.surf.{name}={rng(t)}")
+        for name, t in in_batch.atmos_vars.items():
+            lines.append(f"in.atmos.{name}={rng(t)}")
+
+        # The missing measurement: the model's own prediction, per variable.
+        self.model.eval()
+        with torch.amp.autocast('cuda', enabled=self.use_amp, dtype=self.amp_dtype):
+            out = self.model(in_batch)
+        pred = out[0] if isinstance(out, tuple) else out
+        for attr in ("surf_vars", "atmos_vars"):
+            for name, t in getattr(pred, attr).items():
+                lines.append(f"PRED.{attr[:4]}.{name}={rng(t)}")
+
+        tgt = target_dict_list[0] if isinstance(target_dict_list, list) else target_dict_list
+        for name, t in list(tgt.items())[:6]:
+            lines.append(f"tgt.{name}={rng(t)}")
+
+        log.error("[val-diag] first non-finite val batch: " + " | ".join(lines))
+
+    @torch.no_grad()
     def validate(self, epoch: int) -> float:
         self.model.eval()
         val_loss, n, skipped = 0.0, 0, 0
+        logged_bad = False
         for batch in self.val_loader:
-            if self.max_val_batches is not None and n >= self.max_val_batches:
+            if self.max_val_batches is not None and (n + skipped) >= self.max_val_batches:
                 break
             in_batch, target_dict_list = self._prep_batch(batch)
             with torch.amp.autocast('cuda', enabled=self.use_amp, dtype=self.amp_dtype):
                 losses = self._compute_loss(in_batch, target_dict_list, epoch=epoch)
-            if not torch.isfinite(losses["total"]):
+            total = losses["total"].item()
+            if not math.isfinite(total):
+                skipped += 1
+                if not logged_bad:
+                    self._log_bad_val_batch(in_batch, target_dict_list)
+                    logged_bad = True
                 ts = getattr(in_batch.metadata, "time", ("?",))[0]
                 log.warning(f"[nan-guard] non-finite VAL loss at time={ts}; skipping.")
-                skipped += 1
                 continue
-            val_loss += losses["total"].item()
+            val_loss += total
             n += 1
 
-        mean_val = val_loss / max(n, 1)
+        # v3 FIX: all-skipped must surface as NaN, never as a fake 0.0
+        # ("0.0 < inf" would have marked every broken epoch as new-best).
+        if n == 0:
+            log.error(f"Epoch {epoch:03d} | VALIDATION PRODUCED ZERO FINITE BATCHES "
+                      f"({skipped} skipped)  - reporting NaN. Run "
+                      f"tools/diagnose_val_nan.py against the val years.")
+            mean_val = float("nan")
+        else:
+            mean_val = val_loss / n
+
         if dist.is_initialized():
+            # NaN propagates through the AVG all-reduce, which is what we
+            # want: any rank with zero finite batches poisons (flags) the
+            # global number rather than silently diluting it.
             t = torch.tensor(mean_val, device=self.device)
             dist.all_reduce(t, op=dist.ReduceOp.AVG)
             mean_val = t.item()
         if self.is_main:
-            log.info(f"Epoch {epoch:03d} | VAL loss={mean_val:.4f} ({n} batches, {skipped} skipped)")
+            log.info(f"Epoch {epoch:03d} | VAL loss={mean_val:.4f} "
+                     f"({n} ok, {skipped} skipped)")
             self.metrics.log({"split": "val", "epoch": epoch, "step": self.global_step,
-                            "loss": mean_val, "skipped": skipped})
+                              "loss": mean_val, "n_ok": n, "n_skipped": skipped})
         return mean_val
 
     # ------------------------------------------------------------------
@@ -816,10 +1106,7 @@ class Trainer:
     # ------------------------------------------------------------------
 
     def fit(self) -> int:
-        """Run training.  Returns process exit code:
-        0   = all epochs complete (writes DONE marker),
-        99  = clean timeout stop, checkpoint written → SLURM chain resumes.
-        """
+        """0 = complete (writes DONE); 99 = clean timeout stop (chain resumes)."""
         for epoch in range(self.start_epoch, self.epochs + 1):
             skip = self.resume_batch_offset if epoch == self.start_epoch else 0
             if skip and self.is_main:
@@ -832,18 +1119,18 @@ class Trainer:
 
             if epoch % self.val_every == 0:
                 val_loss = self.validate(epoch)
-                is_best = val_loss < self.best_val
+                # v3 FIX: NaN can never become "best" (NaN < x is False, but
+                # we make the requirement explicit and auditable).
+                is_best = math.isfinite(val_loss) and val_loss < self.best_val
                 if is_best:
                     self.best_val = val_loss
-                # ALWAYS save at epoch end (old code skipped non-improving
-                # epochs entirely → a whole epoch of work could be lost).
                 self._save(f"epoch_{epoch:03d}", epoch + 1, 0,
                            val_loss=val_loss, is_best=is_best, reason="epoch-end")
             else:
                 self._save(f"epoch_{epoch:03d}", epoch + 1, 0, reason="epoch-end")
 
             if dist.is_initialized():
-                dist.barrier()  # nobody starts the next epoch mid-save
+                dist.barrier()
 
         if self.is_main:
             log.info(f"Training complete. Best val loss: {self.best_val:.4f}")

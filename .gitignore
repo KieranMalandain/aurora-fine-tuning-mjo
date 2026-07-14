@@ -31,3 +31,9 @@ investigation_phase1/
 
 checkpoints/baseline/*
 !checkpoints/baseline/metrics.jsonl
+
+checkpoints/lora/*
+!checkpoints/lora/metrics.jsonl
+
+checkpoints/physics_informed/*
+!checkpoints/physics_informed/metrics.jsonl

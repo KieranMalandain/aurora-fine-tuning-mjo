@@ -14,8 +14,8 @@
 #     workaround if the IMA ever reappears (disables the suspect
 #     mem-efficient attention backward).
 #
-# Mode chain: baseline → physics_informed (warm-start) → lora (warm-start)
-#             → combined (warm-start from lora).
+# Mode chain: baseline -> physics_informed (warm-start) -> lora (warm-start)
+#             -> combined (warm-start from lora).
 # `--resume auto` always prefers a mode's OWN checkpoints once they exist.
 
 experiment:
@@ -46,6 +46,23 @@ model:
   gradient_checkpointing: false   # v3: OFF — triggers IMA (handoff §2)
   surface_variables: ["2t", "10u", "10v", "msl", "ttr", "tcwv"]
   norm_stats:
+    # FIX 2 (AURORA_MJO_GAMEPLAN §Finding 1 / FIX 2): dataset.py maps 'msl'
+    # to LANL's surface-pressure ('ps') field as a proxy (true MSL is not
+    # in the LANL archive), but Aurora's built-in normalisation constants
+    # for 'msl' are MSL-calibrated (mean=100958, scale=1332). That drives
+    # every high-terrain input to ~-36 sigma and is the confirmed trigger
+    # for the 100%-non-finite validation. Overriding here forces Aurora's
+    # global locations/scales dict to use ps-appropriate stats instead.
+    #
+    # PLACEHOLDER — these are Aurora's own built-in 'sp' (surface pressure)
+    # stats, used as the FIX-2 fallback (pulls msl to ~-4.6 sigma, "good
+    # enough to unblock" per gameplan). Task A2 must replace these with the
+    # exact ps mean/std computed over the training years via:
+    #   python calc_norm_stats.py --config phase1_baseline.yaml
+    # then copy the printed mean/std into this block before any real
+    # training run (Session A must not proceed past the smoke test on the
+    # placeholder values without re-checking this TODO).
+    msl:  { mean: 96667.9822, std: 9504.6359 }
     ttr:  { mean: -226.0498, std: 49.2158 }
     tcwv: { mean: 18.2967,   std: 16.3265 }
   mjo_head:
@@ -176,3 +193,4 @@ modes:
         max_steps: 4
         step_increase_every_n_epochs: 1
         step_loss_weighting: "final_heavy"
+        

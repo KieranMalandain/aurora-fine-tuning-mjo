@@ -55,7 +55,7 @@ if "NERSC_HOST" in os.environ:
         else:
             os.environ["HF_HOME"] = f"/tmp/hf_home_{os.environ.get('USER', 'default')}"
 
-# Reduce CUDA allocator fragmentation — directly targets the
+# Reduce CUDA allocator fragmentation - directly targets the
 # CUBLAS_STATUS_EXECUTION_FAILED (OOM-in-disguise) seen in job 52464118.
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
@@ -133,10 +133,10 @@ def seed_everything(seed: int):
 def auto_scale_memory(cfg: dict, world_size: int):
     """Adapt memory-relevant settings to the visible GPU.
 
-    Aurora at 0.25° (720×1440) realistically caps per-GPU batch at 1, so
+    Aurora at 0.25deg (720x1440) realistically caps per-GPU batch at 1, so
     "batch scaling" is done through gradient accumulation to reach
     training.target_effective_batch. On < 70 GB cards (or whenever rollout
-    is enabled) gradient checkpointing is forced ON — enabling it mid-run on
+    is enabled) gradient checkpointing is forced ON - enabling it mid-run on
     a live DDP graph, as the old code did at k>=3, is unsafe and was a
     contributor to the cuBLAS crash.
     """
@@ -155,15 +155,32 @@ def auto_scale_memory(cfg: dict, world_size: int):
     if torch.cuda.is_available():
         total_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
         log.info(f"[auto] GPU memory: {total_gb:.0f} GB")
-        if total_gb < 70 and not mcfg.get("gradient_checkpointing", False):
-            log.warning("[auto] <70GB GPU — forcing gradient_checkpointing=true")
-            mcfg["gradient_checkpointing"] = True
-    if tcfg.get("rollout", {}).get("enabled", False) and \
-            tcfg["rollout"].get("max_steps", 1) >= 2 and \
-            not mcfg.get("gradient_checkpointing", False):
-        log.warning("[auto] rollout enabled — forcing gradient_checkpointing=true "
-                    "(must be set BEFORE DDP wrap, never mid-run)")
+
+    # v3: checkpointing is only REQUIRED for full-BPTT rollout (the whole
+    # k-step chain lives in one graph).  Detached rollout backwards each
+    # step immediately, so its activation memory equals single-step training
+    # and checkpointing stays OFF - which also sidesteps the unresolved
+    # checkpointing illegal-memory-access (handoff §2).
+    rcfg = tcfg.get("rollout", {})
+    backprop = str(rcfg.get("backprop", "full")).lower()
+    if rcfg.get("enabled", False) and rcfg.get("max_steps", 1) >= 2 \
+            and backprop == "full" and not mcfg.get("gradient_checkpointing", False):
+        log.warning("[auto] full-BPTT rollout - forcing gradient_checkpointing=true "
+                    "(must be set BEFORE DDP wrap, never mid-run). NOTE: full-BPTT "
+                    "+ checkpointing currently crashes with an illegal memory "
+                    "access on Perlmutter; use rollout.backprop=detached unless "
+                    "tools/repro_ima_matrix.py has found a working combination.")
         mcfg["gradient_checkpointing"] = True
+
+    # Optional SDPA backend pin (IMA workaround knob): training.sdpa_backend:
+    # "math" disables the flash and memory-efficient attention kernels, whose
+    # backward is the prime suspect in the checkpointing crash.
+    sdpa = str(tcfg.get("sdpa_backend", "default")).lower()
+    if sdpa == "math" and torch.cuda.is_available():
+        torch.backends.cuda.enable_flash_sdp(False)
+        torch.backends.cuda.enable_mem_efficient_sdp(False)
+        torch.backends.cuda.enable_math_sdp(True)
+        log.warning("[auto] SDPA pinned to MATH backend (flash/mem-efficient disabled).")
     return cfg
 
 
@@ -290,7 +307,7 @@ def main(argv=None):
     log.info(f"Using device: {device}")
 
     # ------------------------------------------------------------------
-    # 4. Model — rank 0 downloads the pretrained checkpoint first so the
+    # 4. Model - rank 0 downloads the pretrained checkpoint first so the
     #    other 3 ranks hit the (persistent) HF cache instead of racing the
     #    network. Classic double-barrier pattern.
     # ------------------------------------------------------------------
@@ -326,7 +343,7 @@ def main(argv=None):
                 sys.exit(1)
 
     if resume_path is None:
-        # No checkpoint for THIS phase yet → warm-start from a previous
+        # No checkpoint for THIS phase yet -> warm-start from a previous
         # phase's best weights if the config asks for it, e.g.
         #   experiment.init_from: "latest:checkpoints/physics_informed"
         init_from = cfg.get("experiment", {}).get("init_from")
@@ -336,7 +353,7 @@ def main(argv=None):
             else:
                 warm_start_path = Path(init_from)
             if warm_start_path is None or not Path(warm_start_path).exists():
-                log.warning(f"init_from={init_from!r} not found — training from "
+                log.warning(f"init_from={init_from!r} not found - training from "
                             "pretrained Aurora weights only.")
                 warm_start_path = None
 

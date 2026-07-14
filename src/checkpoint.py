@@ -11,7 +11,7 @@ The two failed Perlmutter jobs exposed three resume failures:
      load with strict=False and LOG every missing/unexpected key instead of
      dying, and we refuse silently-broken optimizer restores.
   2. Checkpoints were only written at epoch boundaries.  One epoch of the
-     LANL dataset is ~13.5k steps/rank (>6 h) — longer than a 12 h SLURM
+     LANL dataset is ~13.5k steps/rank (>6 h) - longer than a 12 h SLURM
      allocation minus dataset-init time, so a job could die with ZERO
      checkpoints.  We now save every N optimizer steps (default 500),
      on loss plateau, on SIGUSR1 (SLURM timeout warning), and on wall-clock
@@ -20,10 +20,10 @@ The two failed Perlmutter jobs exposed three resume failures:
      RNG state, so "resume" silently restarted the cosine schedule and the
      rollout curriculum from scratch.  All of that state is now saved.
 
-Atomicity: we write to `<name>.pt.tmp` then os.replace() — a job killed
+Atomicity: we write to `<name>.pt.tmp` then os.replace() - a job killed
 mid-save can never leave a truncated file that later poisons `find_latest`.
 
-A `latest.txt` pointer file (not a symlink — safer on CFS/scratch) always
+A `latest.txt` pointer file (not a symlink - safer on CFS/scratch) always
 names the most recent complete checkpoint.
 """
 
@@ -82,6 +82,8 @@ class CheckpointManager:
         config: dict | None = None,
         is_best: bool = False,
         prune: bool = True,
+        nonfinite_train_batches: int = 0,
+        nonfinite_grad_steps: int = 0,
     ) -> Path | None:
         """Write one checkpoint atomically.  Rank-0 only (others return None).
 
@@ -110,6 +112,10 @@ class CheckpointManager:
             "batch_in_epoch": batch_in_epoch,  # batches consumed THIS epoch
             "best_val": best_val,
             "val_loss": val_loss,
+            # FIX 1 (AURORA_MJO_GAMEPLAN): survive resume across interactive
+            # sessions so the lifetime skip counts stay accurate.
+            "nonfinite_train_batches": nonfinite_train_batches,
+            "nonfinite_grad_steps": nonfinite_grad_steps,
             "config": config,
             # ---- RNG so shuffles/dropout continue deterministically -------
             "rng": {
@@ -214,7 +220,7 @@ class CheckpointManager:
 
         Args:
             weights_only_model: if True, ONLY model weights are restored and
-                counters are zeroed — use when warm-starting a new phase
+                counters are zeroed - use when warm-starting a new phase
                 (e.g. combined training initialized from the physics run).
 
         Returns:
@@ -237,7 +243,10 @@ class CheckpointManager:
         if unexpected:
             log.warning(f"[ckpt] {len(unexpected)} UNEXPECTED keys ignored: {unexpected}")
 
-        counters = {"epoch": 0, "global_step": 0, "batch_in_epoch": 0, "best_val": float("inf")}
+        counters = {
+            "epoch": 0, "global_step": 0, "batch_in_epoch": 0, "best_val": float("inf"),
+            "nonfinite_train_batches": 0, "nonfinite_grad_steps": 0,
+        }
         if weights_only_model:
             log.info(f"[ckpt] warm-start (weights only) from {path.name} in {time.time()-t0:.1f}s")
             return counters
@@ -282,7 +291,7 @@ class CheckpointManager:
 
 
 class MetricsLogger:
-    """Append-only JSONL metrics — safe to resume (we just keep appending).
+    """Append-only JSONL metrics - safe to resume (we just keep appending).
 
     One line per record: {"step": ..., "epoch": ..., "split": "train"|"val",
     "loss": ..., component losses..., "lr": ..., "t": unix_time}.
@@ -301,3 +310,4 @@ class MetricsLogger:
         record = {**record, "t": time.time()}
         with open(self.path, "a") as f:
             f.write(json.dumps(record) + "\n")
+            
