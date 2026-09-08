@@ -15,16 +15,21 @@ aurora-fine-tuning-mjo/
 │   ├── download_era5.py         # The robust downloader (Updated for E & P)
 │   ├── calc_norm_stats.py       # Script to compute mean/std for new vars
 │   ├── compute_rmm.py           # For calculating MJO index
-│   └── evaluate_mjo.py          # Primary formal MJO skill capability evaluation
+│   ├── evaluate_mjo.py          # Primary formal MJO skill capability evaluation
+│   ├── explore_nersc_data.py    # Exploratory script for NERSC NetCDF files
+│   ├── smoke_test_freeze.py     # Verify LoRA frozen backbone
+│   ├── smoke_test_mjo_head.py   # Test MJO Head initialization logic
+│   ├── smoke_test_rollout.py    # Test autoregressive rollout flow
+│   └── verify_dataset_loader.py # Verifies the NERSC dataset loading logic
 │
 ├── slurm_scripts/               # INFRASTRUCTURE
-│   ├── train_rollout.slurm      # Main training submission script
-│   └── eval.slurm               # The evaluation submission script
+│   ├── train.slurm              # The generic submission script
+│   ├── eval.slurm               # The evaluation submission script
+│   └── test_train.slurm         # Short debug-queue script for quick testing
 │
 ├── src/                         # CORE LOGIC (The Engine)
 │   ├── __init__.py
-│   ├── dataset.py               # LANLMJODataset (NERSC Production Fork-Safe Loader)
-│   ├── dummy_dataset.py         # MJODataset (Local Bouchet testing)
+│   ├── dataset.py               # The MJODataset class (Lazy Loading)
 │   ├── model.py                 # Aurora wrapper (MJO Head, LoRA freeze setup)
 │   ├── loss.py                  # Custom losses (Spectral + Moisture Budget)
 │   └── trainer.py               # Rollout timeline logic, dictionary loss accumulation
@@ -46,31 +51,39 @@ This is our main training file that coordinates the source code all together. It
 
 ### `dataset.py`
 
-The primary purpose of this file is to stream multi-terabyte data from the NERSC LANL ERA5 archive into the training loop seamlessly and efficiently.
-
-#### Fork-Safe Architecture
-
-PyTorch `DataLoader` implementations use `os.fork()` to create worker processes when `num_workers > 0`. However, `xarray` datasets backed by `dask` or open `netCDF4` file handles contain internal threading locks that become hopelessly corrupted when forked, causing silent training deadlocks.
-
-To solve this, `LANLMJODataset` stores **only** raw strings (file paths) and a pre-built time-index mapping in memory during `__init__`. During `__getitem__`, it opens the specific required NetCDF files from scratch using standard `xr.open_dataset(engine='netcdf4')`, reads only the required slices, and immediately closes the file handle. This makes the dataset fully fork-safe for maximum multi-processing throughput without memory leaks.
+The point of this file is to allow for efficient data streaming from the dataset to then be loaded into the model. It handles lazy loading of the data, time-slicing, variable renaming, and static variable injection. Memory usage should be $\mathcal{O}(1)$.
 
 #### Global Configuration Maps
 
-The raw data variable names from the ERA5 dataset do not directly match Aurora's expected naming schema. At the top of `dataset.py`, mapping dictionaries explicitly translate the LANL internal paths and native variable names into Aurora names.
+The raw data names from the ERA5 data are not strictly the same as the internal names expected by the Aurora model. These maps at the beginning of the file are essentially a translation layer and easily expandable to new variables (for example, adding in the evaporation and precipitation variables for the physics-informed stage of training).
 
-#### `LANLMJODataset.__getitem__` & Multi-Step Targets
+Essentially it means that we can make a single change here and not have to worry about complex changes inside other methods like `__getitem__`.
 
-This method fetches the input batch (the previous 2 time steps at $t-1$ and $t$) and pairs it with the future target state for supervised training. Crucially, it takes a `max_rollout_steps` argument, and it returns a *list* of targets (one dictionary for each future time step $k$). This allows the trainer to correctly backpropagate each intermediate step of an autoregressive rollout against the actual truth state at that future time.
+#### Lazy file loading `load_and_combine_files()`
 
-#### GPU Upsampling Pipeline
+This opens files as a continuous virtual dataset.
 
-Data on the NERSC LANL disk is natively 1° resolution ($180 \times 360$). Aurora natively runs on 0.25° resolution ($720 \times 1440$). The CPU cannot perform spatial interpolation fast enough to keep the A100 GPUs fed.
+The most important feature here is the lazy loading which is enabled by passing `chunks={'valid_time': 1}` to the `xr.open_mfdataset()` function. It means that the datasets are only opened virtually, but is not read into memory; only the metadata is read. By chunking as one time step, we can feed into the training loop which will take one step at a time.
 
-Therefore, `dataset.py` deliberately avoids resizing and yields data as $180 \times 360$ float32 arrays. The `trainer.py` loop detects this and automatically performs bilinear upsampling **on the GPU** inside `_upsample_batch_gpu()`, granting an massive speedup (~85% of epoch time saved).
+The other importance of this function is the standardization of variables (renaming `valid_time` -> `time`) and slicing the latitude (`721` -> `720`). Thus our `Dataset` class always receives clean data ready to go into the model.
+
+#### Setting up `MJODataset.__init__`
+
+This calculates the length of the dataset and also loads the static variables into memory. This is computationally preferred since there are only a few of these and they are time-independent. It saves the I/O lag of having to keep reloading them for each time step, when they remain the same.
+
+It is also the case that different ERA5 versions name the vertical axis differently, so we handle that here too via simple selection.
+
+#### Loading to memory `MJODataset.__getitem__`
+
+This gets the data that is needed for just one training step. Here is the only place where we call the `.load()` method to move data from disk -> RAM. Slicing it with `isel` means we are only loading small quantities (~50MB) into the RAM at a time and we shouldn't hit a RAM OOM.
+
+#### Data cleaning and upsampling
+
+We need to make sure that we do not load NaNs onto the GPU, which will cause illegal memory access CUDA errors. The dataset heavily relies on `_upsample_to_aurora` to dynamically resample the 1-degree NERSC ERA5 fields up to the 0.25-degree grid natively expected by the Microsoft Aurora checkpoints. Note: TTR (OLR) is provided in $W/m^2$ directly by NERSC, so scaling is no longer necessary.
 
 #### Packaging into a batch `collate_fn()`
 
-Aurora's `Batch` is a custom object containing dictionaries of tensors, and PyTorch isn't able to automatically collate it. We handle this by returning `batch_list[0]` in `collate_fn()`. Currently `batch_size=1` is strictly required.
+Aurora's `Batch` is a custom object containing dictionaries of tensors, and PyTorch isn't able to automatically stack that. With a `BATCH_SIZE=1`, we don't have a problem here (just return the item), but if we increase the batch size in the future then we'll need to rewrite it to manually stack.
 
 ***
 
@@ -160,5 +173,5 @@ The keystone evaluation script. Produces formal skill benchmarks for the generat
 
 ### `smoke_test_*.py`
 
-*(Deprecated)* Various unit test scripts generated during Phase 2 to independently verify the LoRA freezing rules, MJO Head injection validity, and Autoregressive parameter states before triggering 8+ hour SLURM jobs. Smoke testing functionality is now natively embedded inside `train.py` via the `--smoke-test` argument.
+Various unit test scripts generated during Phase 2 to independently verify the LoRA freezing rules, MJO Head injection validity, and Autoregressive parameter states before triggering 8+ hour SLURM jobs.
 

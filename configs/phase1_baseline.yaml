@@ -41,7 +41,8 @@ data:
 # ---------------------------------------------------------------------------
 model:
   model_type: "small"          # "small" -> AuroraSmallPretrained, "huge" -> Aurora
-  use_lora: false
+  use_lora: true
+  freeze_backbone: true
   lora_mode: "single"
   gradient_checkpointing: false
 

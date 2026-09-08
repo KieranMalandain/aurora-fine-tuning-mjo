@@ -27,9 +27,7 @@ from pathlib import Path
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-import torch.distributed as dist
-from torch.utils.data import DataLoader, DistributedSampler
+from torch.utils.data import DataLoader
 
 from src.loss import TropicalWeightedL1Loss, SpectralLoss, MoistureBudgetLoss
 
@@ -136,71 +134,6 @@ def _align_shapes(pred_t, tgt_t):
     return pred_t, tgt_t
 
 
-def _upsample_batch_gpu(in_batch, surf_targets_list, atmos_targets_list, device):
-    """Upsample a 1° batch + targets to 0.25° (720×1440) on GPU.
-
-    Called when the dataset returns native-resolution data.  Static vars
-    are already at 0.25° so they are left untouched.
-
-    Returns (in_batch_upsampled, target_dict_list) ready for the model.
-    """
-    from aurora import Batch, Metadata
-    TARGET_SIZE = (720, 1440)
-
-    def _up(t):
-        """Upsample tensor of any rank to TARGET_SIZE on the last two dims."""
-        orig = t.shape
-        if orig[-2:] == TARGET_SIZE:
-            return t  # already at target res
-        # Collapse to 4-D for F.interpolate
-        if t.ndim == 2:
-            t = t.unsqueeze(0).unsqueeze(0)
-        elif t.ndim == 3:
-            t = t.unsqueeze(0)
-        elif t.ndim == 5:
-            B, T, C, H, W = t.shape
-            t = t.reshape(B * T, C, H, W)
-        elif t.ndim == 4:
-            pass  # already (B, C, H, W)
-        else:
-            return t  # unknown rank, skip
-        t = F.interpolate(t, size=TARGET_SIZE, mode='bilinear', align_corners=False)
-        # Restore original rank
-        if len(orig) == 2:
-            return t.squeeze(0).squeeze(0)
-        elif len(orig) == 3:
-            return t.squeeze(0)
-        elif len(orig) == 5:
-            return t.reshape(orig[0], orig[1], orig[2], *TARGET_SIZE)
-        return t
-
-    # Upsample surface & atmos input vars
-    new_surf = {k: _up(v.to(device)) for k, v in in_batch.surf_vars.items()}
-    new_atmos = {k: _up(v.to(device)) for k, v in in_batch.atmos_vars.items()}
-
-    # Static vars are already at 0.25° — just move to device
-    new_static = {k: v.to(device) for k, v in in_batch.static_vars.items()}
-
-    up_batch = Batch(
-        surf_vars=new_surf,
-        atmos_vars=new_atmos,
-        static_vars=new_static,
-        metadata=in_batch.metadata,
-    )
-
-    # Upsample targets
-    target_dict_list = []
-    for surf_targets, atmos_targets in zip(surf_targets_list, atmos_targets_list):
-        target_dict = {}
-        for k, v in surf_targets.items():
-            target_dict[k] = _up(v.to(device))
-        for k, v in atmos_targets.items():
-            target_dict[k] = _up(v.to(device))
-        target_dict_list.append(target_dict)
-
-    return up_batch, target_dict_list
-
-
 def _advance_batch(in_batch, pred_batch, step_index: int):
     """Build the next input Batch from the previous prediction.
 
@@ -280,9 +213,6 @@ def build_dataloader(cfg: dict, split: str) -> DataLoader:
     data_cfg = cfg["data"]
     use_dummy = data_cfg.get("use_dummy", True)
 
-    rollout_cfg = cfg.get("training", {}).get("rollout", {})
-    max_rollout_steps = rollout_cfg.get("max_steps", 1) if rollout_cfg.get("enabled", False) else 1
-
     if use_dummy:
         # --- Dummy dataset (Yale Bouchet one-month ERA5) ---
         from src.dummy_dataset import MJODataset, load_and_combine_files
@@ -300,7 +230,7 @@ def build_dataloader(cfg: dict, split: str) -> DataLoader:
 
         surface_ds = load_and_combine_files(surface_files)
         pressure_ds = load_and_combine_files(pressure_files)
-        dataset = MJODataset(surface_ds, pressure_ds, static_file, max_rollout_steps=max_rollout_steps)
+        dataset = MJODataset(surface_ds, pressure_ds, static_file)
         collate = MJODataset.collate_fn
 
     else:
@@ -320,31 +250,16 @@ def build_dataloader(cfg: dict, split: str) -> DataLoader:
                     end_year=years[1],
                     root_dir=data_cfg.get("root"),
                     slt_path=data_cfg.get("slt_path"),
-                    max_rollout_steps=max_rollout_steps
                 )
         from src.dataset import collate_fn as collate
 
-    # Use DistributedSampler when running under DDP
-    use_ddp = dist.is_initialized()
-    sampler = None
-    shuffle = (split == "train")
-
-    if use_ddp:
-        sampler = DistributedSampler(
-            dataset, shuffle=shuffle, drop_last=(split == "train")
-        )
-        shuffle = False  # sampler handles shuffling
-
-    num_workers = data_cfg.get("num_workers", 2)
     loader = DataLoader(
         dataset,
         batch_size=data_cfg.get("batch_size", 1),
-        shuffle=shuffle,
-        sampler=sampler,
-        num_workers=num_workers,
+        shuffle=(split == "train"),
+        num_workers=data_cfg.get("num_workers", 2),
         pin_memory=data_cfg.get("pin_memory", True),
         collate_fn=collate,
-        persistent_workers=(num_workers > 0),
     )
     return loader
 
@@ -370,20 +285,16 @@ class Trainer:
         device: torch.device,
         train_loader=None,
         val_loader=None,
-        is_main: bool = True,
     ):
         """
         Args:
             train_loader / val_loader: Optional pre-built DataLoaders.  When
                 supplied (e.g. for smoke-tests) the Trainer skips calling
                 build_dataloader() entirely, avoiding any file-path validation.
-            is_main: True on rank 0 (or single-GPU).  Only rank 0 saves
-                checkpoints and emits step-level logs.
         """
         self.model = model.to(device)
         self.cfg = cfg
         self.device = device
-        self.is_main = is_main
 
         # ------------------------------------------------------------------
         # Build losses
@@ -484,15 +395,6 @@ class Trainer:
         self._step = 0          # global optimiser step counter
         self._saved_ckpts = []  # for keep_last_n bookkeeping
 
-        # ------------------------------------------------------------------
-        # AMP mixed precision
-        # ------------------------------------------------------------------
-        self.use_amp = train_cfg.get("use_amp", False)
-        self.amp_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-        self.grad_scaler = torch.amp.GradScaler('cuda', enabled=(self.use_amp and self.amp_dtype == torch.float16))
-        if self.use_amp:
-            log.info(f"AMP enabled with dtype={self.amp_dtype}")
-
     # ------------------------------------------------------------------
     # Rollout helpers
     # ------------------------------------------------------------------
@@ -536,24 +438,26 @@ class Trainer:
     # Forward + loss
     # ------------------------------------------------------------------
 
-    def _compute_loss(self, in_batch, target_dict_list, epoch: int = 1) -> dict:
+    def _compute_loss(self, in_batch, target_dict, epoch: int = 1) -> dict:
         """
         Run one or more forward passes and compute the composite loss.
 
-        When rollout is disabled (Phase 1) this is identical to the original
-        single-step forward pass.  When enabled, the model is called k times
-        autoregressively; the predicted state is used as input for the next
-        step via :func:`_advance_batch`.  The per-step grid/spectral/mjo_head
-        losses are accumulated with the weighting strategy specified in the
-        config.
+        When rollout is disabled (Phase 1) this is identical to a
+        single-step forward pass.  When enabled, the model is called k
+        times autoregressively; the predicted state is used as input for
+        the next step via :func:`_advance_batch`.
+
+        Grid loss is computed **per-variable** so that the tropical
+        latitude weighting can be applied to each variable's native
+        spatial shape (surface vs. atmospheric levels).  Losses are
+        averaged across variables to keep gradient magnitudes stable.
 
         Args:
             in_batch:    Initial Aurora Batch (from the DataLoader).
-            target_dict_list: List of dicts of target tensors (multi-step, from
-                              the DataLoader). Each step compares its prediction
-                              against the corresponding target dict in the list.
-            epoch:       Current epoch number (1-indexed) used to look up the
-                         curriculum step.
+            target_dict: Dict of target tensors (single-step, from the
+                         DataLoader).
+            epoch:       Current epoch number (1-indexed) used to look up
+                         the curriculum step.
 
         Returns:
             Dict with keys: 'total', 'grid', 'spectral', 'mjo_head'.
@@ -569,11 +473,6 @@ class Trainer:
 
         for step_idx in range(k):
             w = weights[step_idx]
-
-            if isinstance(target_dict_list, dict): # Fallback for single-step dummy loaders
-                target_dict = target_dict_list
-            else:
-                target_dict = target_dict_list[min(step_idx, len(target_dict_list) - 1)]
 
             # ---- Forward pass ----
             model_out = self.model(current_batch)
@@ -593,8 +492,8 @@ class Trainer:
                 if hasattr(pred_batch, "surf_vars"):
                     for var_name, pred_t in pred_batch.surf_vars.items():
                         if var_name in target_dict:
-                            tgt_t = target_dict[var_name].to(self.device).float()
-                            p = pred_t.to(self.device).float()
+                            tgt_t = target_dict[var_name].to(self.device)
+                            p = pred_t.to(self.device)
                             p, tgt_t = _align_shapes(p, tgt_t)
                             var_losses.append(self.grid_loss(p, tgt_t))
 
@@ -602,12 +501,13 @@ class Trainer:
                 if hasattr(pred_batch, "atmos_vars"):
                     for var_name, pred_t in pred_batch.atmos_vars.items():
                         if var_name in target_dict:
-                            tgt_t = target_dict[var_name].to(self.device).float()
-                            p = pred_t.to(self.device).float()
+                            tgt_t = target_dict[var_name].to(self.device)
+                            p = pred_t.to(self.device)
                             p, tgt_t = _align_shapes(p, tgt_t)
                             var_losses.append(self.grid_loss(p, tgt_t))
 
                 if var_losses:
+                    # Average across variables (matches OLD_training_script pattern)
                     acc["grid"] = acc["grid"] + w * (sum(var_losses) / len(var_losses))
 
             # ---- Spectral loss ----
@@ -663,82 +563,43 @@ class Trainer:
         Returns:
             Mean total loss over the epoch.
         """
-        k = self._current_rollout_steps(epoch)
-        if k >= 3 and not getattr(self.model, "_gradient_checkpointing_enabled", False):
-            if hasattr(self.model, "module"):
-                self.model.module.configure_activation_checkpointing()
-            else:
-                self.model.configure_activation_checkpointing()
-            self.model._gradient_checkpointing_enabled = True
-            log.info(f"Auto-enabled gradient checkpointing at rollout step {k}")
-
         self.model.train()
         self.optimizer.zero_grad()
 
         epoch_loss = 0.0
         num_batches = len(self.train_loader)
 
-        # Set epoch on DistributedSampler so shuffling changes each epoch
-        if hasattr(self.train_loader, 'sampler') and isinstance(
-            self.train_loader.sampler, DistributedSampler
-        ):
-            self.train_loader.sampler.set_epoch(epoch)
-
         for batch_idx, batch in enumerate(self.train_loader):
-            # Unpack -- dummy_dataset returns (in_batch, target_dict_list)
-            # real dataset returns   (in_batch, surf_out_list, atmos_out_list)
+            # Unpack -- dummy_dataset returns (in_batch, target_dict)
+            # real dataset returns   (in_batch, surf_out, atmos_out)
             if len(batch) == 2:
-                in_batch, target_dict_list = batch
+                in_batch, target_dict = batch
             elif len(batch) == 3:
-                in_batch, surf_out_list, atmos_out_list = batch
-                
-                # Normalize to lists even if it is a single step (for old dummy loaders)
-                if isinstance(surf_out_list, dict):
-                    surf_out_list = [surf_out_list]
-                    atmos_out_list = [atmos_out_list]
-                    
-                # GPU upsample if data is at native 1° resolution
-                needs_upsample = next(iter(surf_out_list[0].values())).shape[-1] < 720
-                if needs_upsample:
-                    in_batch, target_dict_list = _upsample_batch_gpu(
-                        in_batch, surf_out_list, atmos_out_list, self.device
-                    )
-                else:
-                    target_dict_list = [{**s, **a} for s, a in zip(surf_out_list, atmos_out_list)]
+                in_batch, surf_out, atmos_out = batch
+                # Merge surface and atmos targets into one dict
+                target_dict = {**surf_out, **atmos_out}
             else:
                 raise ValueError(f"Unexpected batch tuple length: {len(batch)}")
 
-            # Ensure all batch tensors are contiguous and float32 before autocast
-            # to avoid dtype mismatch in cuBLAS under bf16 autocast
-            for k_var in in_batch.surf_vars:
-                in_batch.surf_vars[k_var] = in_batch.surf_vars[k_var].to(self.device).float().contiguous()
-            for k_var in in_batch.atmos_vars:
-                in_batch.atmos_vars[k_var] = in_batch.atmos_vars[k_var].to(self.device).float().contiguous()
-            for k_var in in_batch.static_vars:
-                in_batch.static_vars[k_var] = in_batch.static_vars[k_var].to(self.device).float().contiguous()
+            losses = self._compute_loss(in_batch, target_dict, epoch=epoch)
+            loss = losses["total"] / self.grad_accum_steps
 
-            with torch.amp.autocast('cuda', enabled=self.use_amp, dtype=self.amp_dtype):
-                losses = self._compute_loss(in_batch, target_dict_list, epoch=epoch)
-                loss = losses["total"] / self.grad_accum_steps
-
-            self.grad_scaler.scale(loss).backward()
+            loss.backward()
             epoch_loss += losses["total"].item()
 
             # Gradient accumulation
             if (batch_idx + 1) % self.grad_accum_steps == 0:
-                self.grad_scaler.unscale_(self.optimizer)
                 if self.max_grad_norm > 0:
                     nn.utils.clip_grad_norm_(
                         self.model.parameters(), self.max_grad_norm
                     )
-                self.grad_scaler.step(self.optimizer)
-                self.grad_scaler.update()
+                self.optimizer.step()
                 if self.scheduler is not None:
                     self.scheduler.step()
                 self.optimizer.zero_grad()
                 self._step += 1
 
-            if batch_idx % self.log_every == 0 and self.is_main:
+            if batch_idx % self.log_every == 0:
                 lr = self.optimizer.param_groups[0]["lr"]
                 k = self._current_rollout_steps(epoch)
                 log.info(
@@ -752,13 +613,7 @@ class Trainer:
                     f"| lr={lr:.2e}"
                 )
 
-        # All-reduce epoch loss across ranks for consistent reporting
-        epoch_avg = epoch_loss / max(num_batches, 1)
-        if dist.is_initialized():
-            loss_tensor = torch.tensor(epoch_avg, device=self.device)
-            dist.all_reduce(loss_tensor, op=dist.ReduceOp.AVG)
-            epoch_avg = loss_tensor.item()
-        return epoch_avg
+        return epoch_loss / max(num_batches, 1)
 
     # ------------------------------------------------------------------
     # Validation
@@ -779,44 +634,18 @@ class Trainer:
 
         for batch in self.val_loader:
             if len(batch) == 2:
-                in_batch, target_dict_list = batch
+                in_batch, target_dict = batch
             elif len(batch) == 3:
-                in_batch, surf_out_list, atmos_out_list = batch
-                
-                if isinstance(surf_out_list, dict):
-                    surf_out_list = [surf_out_list]
-                    atmos_out_list = [atmos_out_list]
-                
-                needs_upsample = next(iter(surf_out_list[0].values())).shape[-1] < 720
-                if needs_upsample:
-                    in_batch, target_dict_list = _upsample_batch_gpu(
-                        in_batch, surf_out_list, atmos_out_list, self.device
-                    )
-                else:
-                    target_dict_list = [{**s, **a} for s, a in zip(surf_out_list, atmos_out_list)]
+                in_batch, surf_out, atmos_out = batch
+                target_dict = {**surf_out, **atmos_out}
             else:
                 raise ValueError(f"Unexpected batch tuple length: {len(batch)}")
 
-            # Ensure all batch tensors are contiguous and float32 before autocast
-            for k_var in in_batch.surf_vars:
-                in_batch.surf_vars[k_var] = in_batch.surf_vars[k_var].to(self.device).float().contiguous()
-            for k_var in in_batch.atmos_vars:
-                in_batch.atmos_vars[k_var] = in_batch.atmos_vars[k_var].to(self.device).float().contiguous()
-            for k_var in in_batch.static_vars:
-                in_batch.static_vars[k_var] = in_batch.static_vars[k_var].to(self.device).float().contiguous()
-
-            with torch.amp.autocast('cuda', enabled=self.use_amp, dtype=self.amp_dtype):
-                losses = self._compute_loss(in_batch, target_dict_list, epoch=epoch)
+            losses = self._compute_loss(in_batch, target_dict, epoch=epoch)
             val_loss += losses["total"].item()
 
         mean_val = val_loss / max(num_batches, 1)
-        # All-reduce val loss across ranks
-        if dist.is_initialized():
-            loss_tensor = torch.tensor(mean_val, device=self.device)
-            dist.all_reduce(loss_tensor, op=dist.ReduceOp.AVG)
-            mean_val = loss_tensor.item()
-        if self.is_main:
-            log.info(f"Epoch {epoch:03d} | VAL loss={mean_val:.4f}")
+        log.info(f"Epoch {epoch:03d} | VAL loss={mean_val:.4f}")
         return mean_val
 
     # ------------------------------------------------------------------
@@ -824,15 +653,11 @@ class Trainer:
     # ------------------------------------------------------------------
 
     def save_checkpoint(self, epoch: int, val_loss: float):
-        if not self.is_main:
-            return  # Only rank 0 saves
-        # Unwrap DDP wrapper to save the raw model state_dict
-        raw_model = self.model.module if hasattr(self.model, 'module') else self.model
         fname = self.save_dir / f"epoch_{epoch:03d}_val{val_loss:.4f}.pt"
         torch.save(
             {
                 "epoch": epoch,
-                "model_state_dict": raw_model.state_dict(),
+                "model_state_dict": self.model.state_dict(),
                 "optimizer_state_dict": self.optimizer.state_dict(),
                 "val_loss": val_loss,
                 "config": self.cfg,
@@ -861,8 +686,7 @@ class Trainer:
 
         for epoch in range(1, self.epochs + 1):
             train_loss = self.train_epoch(epoch)
-            if self.is_main:
-                log.info(f"Epoch {epoch:03d} | TRAIN loss={train_loss:.4f}")
+            log.info(f"Epoch {epoch:03d} | TRAIN loss={train_loss:.4f}")
 
             if epoch % self.val_every == 0:
                 val_loss = self.validate(epoch)
