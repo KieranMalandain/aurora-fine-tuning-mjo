@@ -140,8 +140,8 @@ def _install_smoke_test_loader(cfg: dict, device: torch.device):
     from aurora import Batch, Metadata
     import datetime
 
-    # Tiny spatial resolution for speed
-    H, W = 8, 16
+    # Spatial resolution must be large enough to survive Swin3D downsampling layers
+    H, W = 32, 64
     LEVELS = (50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 850, 925, 1000)
     # Read surface vars from config (already stripped of ttr/tcwv by _patch_config)
     SURF_KEYS  = tuple(cfg["model"]["surface_variables"])

@@ -85,7 +85,8 @@ def _build_scheduler(optimizer, cfg: dict, steps_per_epoch: int):
 def _extract_batch_outputs(pred_batch, target_dict, device):
     """
     Given an Aurora output Batch and a target dict, return stacked
-    (pred_tensor, target_tensor) for the grid loss.
+    (pred_tensor, target_tensor) for losses that need flattened inputs
+    (e.g. spectral loss).
 
     Aurora's output Batch has .surf_vars and .atmos_vars as dicts of tensors.
     We only compare keys that exist in both pred and target.
@@ -110,6 +111,27 @@ def _extract_batch_outputs(pred_batch, target_dict, device):
     pred_tensor = torch.cat([t.reshape(t.shape[0], -1) for t in pred_parts], dim=-1)
     tgt_tensor  = torch.cat([t.reshape(t.shape[0], -1) for t in tgt_parts],  dim=-1)
     return pred_tensor, tgt_tensor
+
+
+def _align_shapes(pred_t, tgt_t):
+    """Squeeze / unsqueeze so pred and target have identical shapes.
+
+    Aurora's output often has an extra time dimension (B, 1, ...) while
+    the dataset target may lack it or vice-versa.  This helper removes
+    singleton leading dims from the larger tensor or adds them to the
+    smaller one until shapes match.
+    """
+    while pred_t.ndim > tgt_t.ndim:
+        if pred_t.shape[1] == 1:
+            pred_t = pred_t.squeeze(1)
+        else:
+            break
+    while tgt_t.ndim > pred_t.ndim:
+        if tgt_t.shape[0] == 1 or tgt_t.shape[1] == 1:
+            tgt_t = tgt_t.squeeze(0) if tgt_t.shape[0] == 1 else tgt_t.squeeze(1)
+        else:
+            break
+    return pred_t, tgt_t
 
 
 def _advance_batch(in_batch, pred_batch, step_index: int):
@@ -227,6 +249,7 @@ def build_dataloader(cfg: dict, split: str) -> DataLoader:
                     start_year=years[0],
                     end_year=years[1],
                     root_dir=data_cfg.get("root"),
+                    slt_path=data_cfg.get("slt_path"),
                 )
         from src.dataset import collate_fn as collate
 
@@ -419,22 +442,22 @@ class Trainer:
         """
         Run one or more forward passes and compute the composite loss.
 
-        When rollout is disabled (Phase 1) this is identical to the original
-        single-step forward pass.  When enabled, the model is called k times
-        autoregressively; the predicted state is used as input for the next
-        step via :func:`_advance_batch`.  The per-step grid/spectral/mjo_head
-        losses are accumulated with the weighting strategy specified in the
-        config.
+        When rollout is disabled (Phase 1) this is identical to a
+        single-step forward pass.  When enabled, the model is called k
+        times autoregressively; the predicted state is used as input for
+        the next step via :func:`_advance_batch`.
+
+        Grid loss is computed **per-variable** so that the tropical
+        latitude weighting can be applied to each variable's native
+        spatial shape (surface vs. atmospheric levels).  Losses are
+        averaged across variables to keep gradient magnitudes stable.
 
         Args:
             in_batch:    Initial Aurora Batch (from the DataLoader).
             target_dict: Dict of target tensors (single-step, from the
-                         DataLoader).  Only used to compute losses against the
-                         *step-1* target; for k > 1 steps we still compare
-                         every prediction against this same target because the
-                         dataset emits only one-step targets.
-            epoch:       Current epoch number (1-indexed) used to look up the
-                         curriculum step.
+                         DataLoader).
+            epoch:       Current epoch number (1-indexed) used to look up
+                         the curriculum step.
 
         Returns:
             Dict with keys: 'total', 'grid', 'spectral', 'mjo_head'.
@@ -461,14 +484,31 @@ class Trainer:
                 pred_batch = model_out
                 mjo_pred   = None
 
-            # ---- Grid loss ----
+            # ---- Grid loss (per-variable, tropically weighted) ----
             if self.use_grid_loss:
-                pred_t, tgt_t = _extract_batch_outputs(
-                    pred_batch, target_dict, self.device
-                )
-                if pred_t is not None:
-                    acc["grid"] = acc["grid"] + w * self.grid_loss(pred_t, tgt_t)
-            # (if not use_grid_loss, acc["grid"] stays 0.0)
+                var_losses = []
+
+                # Surface variables
+                if hasattr(pred_batch, "surf_vars"):
+                    for var_name, pred_t in pred_batch.surf_vars.items():
+                        if var_name in target_dict:
+                            tgt_t = target_dict[var_name].to(self.device)
+                            p = pred_t.to(self.device)
+                            p, tgt_t = _align_shapes(p, tgt_t)
+                            var_losses.append(self.grid_loss(p, tgt_t))
+
+                # Atmospheric variables
+                if hasattr(pred_batch, "atmos_vars"):
+                    for var_name, pred_t in pred_batch.atmos_vars.items():
+                        if var_name in target_dict:
+                            tgt_t = target_dict[var_name].to(self.device)
+                            p = pred_t.to(self.device)
+                            p, tgt_t = _align_shapes(p, tgt_t)
+                            var_losses.append(self.grid_loss(p, tgt_t))
+
+                if var_losses:
+                    # Average across variables (matches OLD_training_script pattern)
+                    acc["grid"] = acc["grid"] + w * (sum(var_losses) / len(var_losses))
 
             # ---- Spectral loss ----
             if self.spectral_loss is not None and self.spectral_weight > 0:
