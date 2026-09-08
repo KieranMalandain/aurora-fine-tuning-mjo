@@ -1,2 +1,0 @@
-{"split": "train", "epoch": 1, "batch": 1, "step": 0, "loss": 6.896390914916992, "grid": 6.896390914916992, "spectral": 0.0, "mjo_head": 0.0, "moisture_budget": 0.0, "lr": 0.0, "rollout_k": 4, "detached": true, "nan_skipped_total": 3, "t": 1783889756.6810923}
-{"split": "val", "epoch": 1, "step": 10, "loss": NaN, "n_ok": 0, "n_skipped": 200, "t": 1783890082.5595398}
