@@ -1,0 +1,279 @@
+cmd ran: HDF5_USE_FILE_LOCKING=FALSE /pscratch/sd/k/kam352/conda_envs/aurora_mjo/bin/python -u tools/diagnose_val_nan.py --years 2016 2019
+output:
+==============================================================================
+STAGE 1 - FILE & TIMESTAMP AUDIT
+==============================================================================
+     2t: files=48   in-range-steps=5844   
+           e5.oper.an.sfc.128_167_2t.ll025sc.201601_remap_180x360.nc: 124 steps [2016-01-01T00:00 .. 2016-01-31T18:00]
+           e5.oper.an.sfc.128_167_2t.ll025sc.201602_remap_180x360.nc: 116 steps [2016-02-01T00:00 .. 2016-02-29T18:00]
+           e5.oper.an.sfc.128_167_2t.ll025sc.201603_remap_180x360.nc: 124 steps [2016-03-01T00:00 .. 2016-03-31T18:00]
+           ...
+           e5.oper.an.sfc.128_167_2t.ll025sc.201910_remap_180x360.nc: 124 steps [2019-10-01T00:00 .. 2019-10-31T18:00]
+           e5.oper.an.sfc.128_167_2t.ll025sc.201911_remap_180x360.nc: 120 steps [2019-11-01T00:00 .. 2019-11-30T18:00]
+           e5.oper.an.sfc.128_167_2t.ll025sc.201912_remap_180x360.nc: 124 steps [2019-12-01T00:00 .. 2019-12-31T18:00]
+    10u: files=48   in-range-steps=5844   
+           e5.oper.an.sfc.128_165_10u.ll025sc.201601_remap_180x360.nc: 124 steps [2016-01-01T00:00 .. 2016-01-31T18:00]
+           e5.oper.an.sfc.128_165_10u.ll025sc.201602_remap_180x360.nc: 116 steps [2016-02-01T00:00 .. 2016-02-29T18:00]
+           e5.oper.an.sfc.128_165_10u.ll025sc.201603_remap_180x360.nc: 124 steps [2016-03-01T00:00 .. 2016-03-31T18:00]
+           ...
+           e5.oper.an.sfc.128_165_10u.ll025sc.201910_remap_180x360.nc: 124 steps [2019-10-01T00:00 .. 2019-10-31T18:00]
+           e5.oper.an.sfc.128_165_10u.ll025sc.201911_remap_180x360.nc: 120 steps [2019-11-01T00:00 .. 2019-11-30T18:00]
+           e5.oper.an.sfc.128_165_10u.ll025sc.201912_remap_180x360.nc: 124 steps [2019-12-01T00:00 .. 2019-12-31T18:00]
+    10v: files=48   in-range-steps=5844   
+           e5.oper.an.sfc.128_166_10v.ll025sc.201601_remap_180x360.nc: 124 steps [2016-01-01T00:00 .. 2016-01-31T18:00]
+           e5.oper.an.sfc.128_166_10v.ll025sc.201602_remap_180x360.nc: 116 steps [2016-02-01T00:00 .. 2016-02-29T18:00]
+           e5.oper.an.sfc.128_166_10v.ll025sc.201603_remap_180x360.nc: 124 steps [2016-03-01T00:00 .. 2016-03-31T18:00]
+           ...
+           e5.oper.an.sfc.128_166_10v.ll025sc.201910_remap_180x360.nc: 124 steps [2019-10-01T00:00 .. 2019-10-31T18:00]
+           e5.oper.an.sfc.128_166_10v.ll025sc.201911_remap_180x360.nc: 120 steps [2019-11-01T00:00 .. 2019-11-30T18:00]
+           e5.oper.an.sfc.128_166_10v.ll025sc.201912_remap_180x360.nc: 124 steps [2019-12-01T00:00 .. 2019-12-31T18:00]
+    msl: files=48   in-range-steps=5844   
+           e5.oper.an.sfc.128_134_sp.ll025sc.201601_remap_180x360.nc: 124 steps [2016-01-01T00:00 .. 2016-01-31T18:00]
+           e5.oper.an.sfc.128_134_sp.ll025sc.201602_remap_180x360.nc: 116 steps [2016-02-01T00:00 .. 2016-02-29T18:00]
+           e5.oper.an.sfc.128_134_sp.ll025sc.201603_remap_180x360.nc: 124 steps [2016-03-01T00:00 .. 2016-03-31T18:00]
+           ...
+           e5.oper.an.sfc.128_134_sp.ll025sc.201910_remap_180x360.nc: 124 steps [2019-10-01T00:00 .. 2019-10-31T18:00]
+           e5.oper.an.sfc.128_134_sp.ll025sc.201911_remap_180x360.nc: 120 steps [2019-11-01T00:00 .. 2019-11-30T18:00]
+           e5.oper.an.sfc.128_134_sp.ll025sc.201912_remap_180x360.nc: 124 steps [2019-12-01T00:00 .. 2019-12-31T18:00]
+    ttr: files=48   in-range-steps=5844   
+           e5.oper.fc.sfc.meanflux.235_040_mtnlwrf.ll025sc_remap_180x360_201601.nc: 124 steps [2016-01-01T00:00 .. 2016-01-31T18:00]
+           e5.oper.fc.sfc.meanflux.235_040_mtnlwrf.ll025sc_remap_180x360_201602.nc: 116 steps [2016-02-01T00:00 .. 2016-02-29T18:00]
+           e5.oper.fc.sfc.meanflux.235_040_mtnlwrf.ll025sc_remap_180x360_201603.nc: 124 steps [2016-03-01T00:00 .. 2016-03-31T18:00]
+           ...
+           e5.oper.fc.sfc.meanflux.235_040_mtnlwrf.ll025sc_remap_180x360_201910.nc: 124 steps [2019-10-01T00:00 .. 2019-10-31T18:00]
+           e5.oper.fc.sfc.meanflux.235_040_mtnlwrf.ll025sc_remap_180x360_201911.nc: 120 steps [2019-11-01T00:00 .. 2019-11-30T18:00]
+           e5.oper.fc.sfc.meanflux.235_040_mtnlwrf.ll025sc_remap_180x360_201912.nc: 124 steps [2019-12-01T00:00 .. 2019-12-31T18:00]
+   tcwv: files=48   in-range-steps=5844   
+           e5.oper.an.sfc.128_137_tcwv.ll025sc.201601_remap_180x360.nc: 124 steps [2016-01-01T00:00 .. 2016-01-31T18:00]
+           e5.oper.an.sfc.128_137_tcwv.ll025sc.201602_remap_180x360.nc: 116 steps [2016-02-01T00:00 .. 2016-02-29T18:00]
+           e5.oper.an.sfc.128_137_tcwv.ll025sc.201603_remap_180x360.nc: 124 steps [2016-03-01T00:00 .. 2016-03-31T18:00]
+           ...
+           e5.oper.an.sfc.128_137_tcwv.ll025sc.201910_remap_180x360.nc: 124 steps [2019-10-01T00:00 .. 2019-10-31T18:00]
+           e5.oper.an.sfc.128_137_tcwv.ll025sc.201911_remap_180x360.nc: 120 steps [2019-11-01T00:00 .. 2019-11-30T18:00]
+           e5.oper.an.sfc.128_137_tcwv.ll025sc.201912_remap_180x360.nc: 124 steps [2019-12-01T00:00 .. 2019-12-31T18:00]
+      z: files=48   in-range-steps=5844   
+           e5.oper.an.pl.128_129_z.ll025sc.201601_remap_180x360MODIS.nc: 124 steps [2016-01-01T00:00 .. 2016-01-31T18:00]
+           e5.oper.an.pl.128_129_z.ll025sc.201602_remap_180x360MODIS.nc: 116 steps [2016-02-01T00:00 .. 2016-02-29T18:00]
+           e5.oper.an.pl.128_129_z.ll025sc.201603_remap_180x360MODIS.nc: 124 steps [2016-03-01T00:00 .. 2016-03-31T18:00]
+           ...
+           e5.oper.an.pl.128_129_z.ll025sc.201910_remap_180x360MODIS.nc: 124 steps [2019-10-01T00:00 .. 2019-10-31T18:00]
+           e5.oper.an.pl.128_129_z.ll025sc.201911_remap_180x360MODIS.nc: 120 steps [2019-11-01T00:00 .. 2019-11-30T18:00]
+           e5.oper.an.pl.128_129_z.ll025sc.201912_remap_180x360MODIS.nc: 124 steps [2019-12-01T00:00 .. 2019-12-31T18:00]
+      q: files=48   in-range-steps=5844   
+           e5.oper.an.pl.128_133_q.ll025sc.201601_remap_180x360MODIS.nc: 124 steps [2016-01-01T00:00 .. 2016-01-31T18:00]
+           e5.oper.an.pl.128_133_q.ll025sc.201602_remap_180x360MODIS.nc: 116 steps [2016-02-01T00:00 .. 2016-02-29T18:00]
+           e5.oper.an.pl.128_133_q.ll025sc.201603_remap_180x360MODIS.nc: 124 steps [2016-03-01T00:00 .. 2016-03-31T18:00]
+           ...
+           e5.oper.an.pl.128_133_q.ll025sc.201910_remap_180x360MODIS.nc: 124 steps [2019-10-01T00:00 .. 2019-10-31T18:00]
+           e5.oper.an.pl.128_133_q.ll025sc.201911_remap_180x360MODIS.nc: 120 steps [2019-11-01T00:00 .. 2019-11-30T18:00]
+           e5.oper.an.pl.128_133_q.ll025sc.201912_remap_180x360MODIS.nc: 124 steps [2019-12-01T00:00 .. 2019-12-31T18:00]
+      t: files=48   in-range-steps=5844   
+           e5.oper.an.pl.128_130_t.ll025sc.201601_remap_180x360MODIS.nc: 124 steps [2016-01-01T00:00 .. 2016-01-31T18:00]
+           e5.oper.an.pl.128_130_t.ll025sc.201602_remap_180x360MODIS.nc: 116 steps [2016-02-01T00:00 .. 2016-02-29T18:00]
+           e5.oper.an.pl.128_130_t.ll025sc.201603_remap_180x360MODIS.nc: 124 steps [2016-03-01T00:00 .. 2016-03-31T18:00]
+           ...
+           e5.oper.an.pl.128_130_t.ll025sc.201910_remap_180x360MODIS.nc: 124 steps [2019-10-01T00:00 .. 2019-10-31T18:00]
+           e5.oper.an.pl.128_130_t.ll025sc.201911_remap_180x360MODIS.nc: 120 steps [2019-11-01T00:00 .. 2019-11-30T18:00]
+           e5.oper.an.pl.128_130_t.ll025sc.201912_remap_180x360MODIS.nc: 124 steps [2019-12-01T00:00 .. 2019-12-31T18:00]
+      u: files=48   in-range-steps=5844   
+           e5.oper.an.pl.128_131_u.ll025uv.201601_remap_180x360MODIS.nc: 124 steps [2016-01-01T00:00 .. 2016-01-31T18:00]
+           e5.oper.an.pl.128_131_u.ll025uv.201602_remap_180x360MODIS.nc: 116 steps [2016-02-01T00:00 .. 2016-02-29T18:00]
+           e5.oper.an.pl.128_131_u.ll025uv.201603_remap_180x360MODIS.nc: 124 steps [2016-03-01T00:00 .. 2016-03-31T18:00]
+           ...
+           e5.oper.an.pl.128_131_u.ll025uv.201910_remap_180x360MODIS.nc: 124 steps [2019-10-01T00:00 .. 2019-10-31T18:00]
+           e5.oper.an.pl.128_131_u.ll025uv.201911_remap_180x360MODIS.nc: 120 steps [2019-11-01T00:00 .. 2019-11-30T18:00]
+           e5.oper.an.pl.128_131_u.ll025uv.201912_remap_180x360MODIS.nc: 124 steps [2019-12-01T00:00 .. 2019-12-31T18:00]
+      v: files=48   in-range-steps=5844   
+           e5.oper.an.pl.128_132_v.ll025uv.201601_remap_180x360MODIS.nc: 124 steps [2016-01-01T00:00 .. 2016-01-31T18:00]
+           e5.oper.an.pl.128_132_v.ll025uv.201602_remap_180x360MODIS.nc: 116 steps [2016-02-01T00:00 .. 2016-02-29T18:00]
+           e5.oper.an.pl.128_132_v.ll025uv.201603_remap_180x360MODIS.nc: 124 steps [2016-03-01T00:00 .. 2016-03-31T18:00]
+           ...
+           e5.oper.an.pl.128_132_v.ll025uv.201910_remap_180x360MODIS.nc: 124 steps [2019-10-01T00:00 .. 2019-10-31T18:00]
+           e5.oper.an.pl.128_132_v.ll025uv.201911_remap_180x360MODIS.nc: 120 steps [2019-11-01T00:00 .. 2019-11-30T18:00]
+           e5.oper.an.pl.128_132_v.ll025uv.201912_remap_180x360MODIS.nc: 124 steps [2019-12-01T00:00 .. 2019-12-31T18:00]
+
+  Cross-variable: intersection=5844 steps
+    All variables share an identical timestamp set -> hypothesis B (cross-variable misalignment) REFUTED for this range.
+
+==============================================================================
+STAGE 2 - RAW VALUE SCAN (up to 6 files/var, evenly spaced)
+==============================================================================
+     2t (      t2): scanned 6 files, 48M vals | NaN=0 Inf=0 extreme=0 | range=[197.3, 324] mean~278.9
+    10u (     u10): scanned 6 files, 48M vals | NaN=0 Inf=0 extreme=0 | range=[-32.1, 30.2] mean~-0.02236
+    10v (     v10): scanned 6 files, 48M vals | NaN=0 Inf=0 extreme=0 | range=[-26.74, 31.18] mean~0.146
+    msl (      ps): scanned 6 files, 48M vals | NaN=0 Inf=0 extreme=0 | range=[5.141e+04, 1.053e+05] mean~9.666e+04
+    ttr ( mtnlwrf): scanned 6 files, 48M vals | NaN=0 Inf=0 extreme=0 | range=[-396.2, -71.61] mean~-226.1
+   tcwv (    tcwv): scanned 6 files, 48M vals | NaN=0 Inf=0 extreme=0 | range=[0.05225, 84.33] mean~18.56
+      z (       z): scanned 6 files, 1398M vals | NaN=0 Inf=0 extreme=0 | range=[-5747, 2.071e+05] mean~6.545e+04
+      q (       q): scanned 6 files, 1398M vals | NaN=0 Inf=0 extreme=0 | range=[-4.824e-05, 0.02896] mean~0.002271
+      t (       t): scanned 6 files, 1398M vals | NaN=0 Inf=0 extreme=0 | range=[175.9, 321.8] mean~249.2
+      u (       u): scanned 6 files, 1398M vals | NaN=0 Inf=0 extreme=0 | range=[-65.33, 121.3] mean~6.443
+      v (       v): scanned 6 files, 1398M vals | NaN=0 Inf=0 extreme=0 | range=[-89, 90.17] mean~0.04195
+
+==============================================================================
+STAGE 3 - DATASET-PATH SAMPLE CHECK (12 samples via LANLMJODataset)
+==============================================================================
+Initializing LANL MJO Dataset (2016-2019) [timestamp-aligned v3]...
+  [align] requested range 2016-2019 | common timeline: 5844 steps | union: 5844 | valid 1-step samples: 5842
+  [align]      2t: files=48   raw_steps=5844    kept=5844   
+  [align]     10u: files=48   raw_steps=5844    kept=5844   
+  [align]     10v: files=48   raw_steps=5844    kept=5844   
+  [align]     msl: files=48   raw_steps=5844    kept=5844   
+  [align]     ttr: files=48   raw_steps=5844    kept=5844   
+  [align]    tcwv: files=48   raw_steps=5844    kept=5844   
+  [align]       z: files=48   raw_steps=5844    kept=5844   
+  [align]       q: files=48   raw_steps=5844    kept=5844   
+  [align]       t: files=48   raw_steps=5844    kept=5844   
+  [align]       u: files=48   raw_steps=5844    kept=5844   
+  [align]       v: files=48   raw_steps=5844    kept=5844   
+      in.atmos.q: range=[-1.758e-05, 0.0246]
+      in.atmos.t: range=[178.1, 320.9]
+      in.atmos.u: range=[-59.73, 101.1]
+      in.atmos.v: range=[-72.06, 82.31]
+      in.atmos.z: range=[-4977, 2.076e+05]
+     in.surf.10u: range=[-25.94, 25.78]
+     in.surf.10v: range=[-22.97, 24.94]
+      in.surf.2t: range=[197.9, 320.8]
+     in.surf.msl: range=[5.168e+04, 1.045e+05]
+    in.surf.tcwv: range=[0.07285, 79.29]
+     in.surf.ttr: range=[-384.8, -74.74]
+     tgt.atmos.q: range=[-1.692e-05, 0.02596]
+     tgt.atmos.t: range=[180, 322.7]
+     tgt.atmos.u: range=[-60.91, 99.84]
+     tgt.atmos.v: range=[-74.4, 87.03]
+     tgt.atmos.z: range=[-5522, 2.076e+05]
+    tgt.surf.10u: range=[-24.52, 23.09]
+    tgt.surf.10v: range=[-21.24, 23.41]
+     tgt.surf.2t: range=[198.4, 322.7]
+    tgt.surf.msl: range=[5.174e+04, 1.046e+05]
+   tgt.surf.tcwv: range=[0.07472, 80.19]
+    tgt.surf.ttr: range=[-387.2, -80]
+  All 12 samples finite through the production read path.
+
+==============================================================================
+VERDICT: CLEAN - no leakage, no misalignment, no bad values in the scanned range.
+
+
+
+cmd ran: HDF5_USE_FILE_LOCKING=FALSE /pscratch/sd/k/kam352/conda_envs/aurora_mjo/bin/python -u tools/diagnose_val_nan.py --years 1984 1985 --skip-dataset
+output:
+==============================================================================
+STAGE 1 - FILE & TIMESTAMP AUDIT
+==============================================================================
+     2t: files=24   in-range-steps=2924   
+           e5.oper.an.sfc.128_167_2t.ll025sc.198401_remap_180x360.nc: 124 steps [1984-01-01T00:00 .. 1984-01-31T18:00]
+           e5.oper.an.sfc.128_167_2t.ll025sc.198402_remap_180x360.nc: 116 steps [1984-02-01T00:00 .. 1984-02-29T18:00]
+           e5.oper.an.sfc.128_167_2t.ll025sc.198403_remap_180x360.nc: 124 steps [1984-03-01T00:00 .. 1984-03-31T18:00]
+           ...
+           e5.oper.an.sfc.128_167_2t.ll025sc.198510_remap_180x360.nc: 124 steps [1985-10-01T00:00 .. 1985-10-31T18:00]
+           e5.oper.an.sfc.128_167_2t.ll025sc.198511_remap_180x360.nc: 120 steps [1985-11-01T00:00 .. 1985-11-30T18:00]
+           e5.oper.an.sfc.128_167_2t.ll025sc.198512_remap_180x360.nc: 124 steps [1985-12-01T00:00 .. 1985-12-31T18:00]
+    10u: files=24   in-range-steps=2924   
+           e5.oper.an.sfc.128_165_10u.ll025sc.198401_remap_180x360.nc: 124 steps [1984-01-01T00:00 .. 1984-01-31T18:00]
+           e5.oper.an.sfc.128_165_10u.ll025sc.198402_remap_180x360.nc: 116 steps [1984-02-01T00:00 .. 1984-02-29T18:00]
+           e5.oper.an.sfc.128_165_10u.ll025sc.198403_remap_180x360.nc: 124 steps [1984-03-01T00:00 .. 1984-03-31T18:00]
+           ...
+           e5.oper.an.sfc.128_165_10u.ll025sc.198510_remap_180x360.nc: 124 steps [1985-10-01T00:00 .. 1985-10-31T18:00]
+           e5.oper.an.sfc.128_165_10u.ll025sc.198511_remap_180x360.nc: 120 steps [1985-11-01T00:00 .. 1985-11-30T18:00]
+           e5.oper.an.sfc.128_165_10u.ll025sc.198512_remap_180x360.nc: 124 steps [1985-12-01T00:00 .. 1985-12-31T18:00]
+    10v: files=24   in-range-steps=2924   
+           e5.oper.an.sfc.128_166_10v.ll025sc.198401_remap_180x360.nc: 124 steps [1984-01-01T00:00 .. 1984-01-31T18:00]
+           e5.oper.an.sfc.128_166_10v.ll025sc.198402_remap_180x360.nc: 116 steps [1984-02-01T00:00 .. 1984-02-29T18:00]
+           e5.oper.an.sfc.128_166_10v.ll025sc.198403_remap_180x360.nc: 124 steps [1984-03-01T00:00 .. 1984-03-31T18:00]
+           ...
+           e5.oper.an.sfc.128_166_10v.ll025sc.198510_remap_180x360.nc: 124 steps [1985-10-01T00:00 .. 1985-10-31T18:00]
+           e5.oper.an.sfc.128_166_10v.ll025sc.198511_remap_180x360.nc: 120 steps [1985-11-01T00:00 .. 1985-11-30T18:00]
+           e5.oper.an.sfc.128_166_10v.ll025sc.198512_remap_180x360.nc: 124 steps [1985-12-01T00:00 .. 1985-12-31T18:00]
+    msl: files=24   in-range-steps=2924   
+           e5.oper.an.sfc.128_134_sp.ll025sc.198401_remap_180x360.nc: 124 steps [1984-01-01T00:00 .. 1984-01-31T18:00]
+           e5.oper.an.sfc.128_134_sp.ll025sc.198402_remap_180x360.nc: 116 steps [1984-02-01T00:00 .. 1984-02-29T18:00]
+           e5.oper.an.sfc.128_134_sp.ll025sc.198403_remap_180x360.nc: 124 steps [1984-03-01T00:00 .. 1984-03-31T18:00]
+           ...
+           e5.oper.an.sfc.128_134_sp.ll025sc.198510_remap_180x360.nc: 124 steps [1985-10-01T00:00 .. 1985-10-31T18:00]
+           e5.oper.an.sfc.128_134_sp.ll025sc.198511_remap_180x360.nc: 120 steps [1985-11-01T00:00 .. 1985-11-30T18:00]
+           e5.oper.an.sfc.128_134_sp.ll025sc.198512_remap_180x360.nc: 124 steps [1985-12-01T00:00 .. 1985-12-31T18:00]
+    ttr: files=24   in-range-steps=2924   
+           e5.oper.fc.sfc.meanflux.235_040_mtnlwrf.ll025sc_remap_180x360_198401.nc: 124 steps [1984-01-01T00:00 .. 1984-01-31T18:00]
+           e5.oper.fc.sfc.meanflux.235_040_mtnlwrf.ll025sc_remap_180x360_198402.nc: 116 steps [1984-02-01T00:00 .. 1984-02-29T18:00]
+           e5.oper.fc.sfc.meanflux.235_040_mtnlwrf.ll025sc_remap_180x360_198403.nc: 124 steps [1984-03-01T00:00 .. 1984-03-31T18:00]
+           ...
+           e5.oper.fc.sfc.meanflux.235_040_mtnlwrf.ll025sc_remap_180x360_198510.nc: 124 steps [1985-10-01T00:00 .. 1985-10-31T18:00]
+           e5.oper.fc.sfc.meanflux.235_040_mtnlwrf.ll025sc_remap_180x360_198511.nc: 120 steps [1985-11-01T00:00 .. 1985-11-30T18:00]
+           e5.oper.fc.sfc.meanflux.235_040_mtnlwrf.ll025sc_remap_180x360_198512.nc: 124 steps [1985-12-01T00:00 .. 1985-12-31T18:00]
+   tcwv: files=24   in-range-steps=2924   
+           e5.oper.an.sfc.128_137_tcwv.ll025sc.198401_remap_180x360.nc: 124 steps [1984-01-01T00:00 .. 1984-01-31T18:00]
+           e5.oper.an.sfc.128_137_tcwv.ll025sc.198402_remap_180x360.nc: 116 steps [1984-02-01T00:00 .. 1984-02-29T18:00]
+           e5.oper.an.sfc.128_137_tcwv.ll025sc.198403_remap_180x360.nc: 124 steps [1984-03-01T00:00 .. 1984-03-31T18:00]
+           ...
+           e5.oper.an.sfc.128_137_tcwv.ll025sc.198510_remap_180x360.nc: 124 steps [1985-10-01T00:00 .. 1985-10-31T18:00]
+           e5.oper.an.sfc.128_137_tcwv.ll025sc.198511_remap_180x360.nc: 120 steps [1985-11-01T00:00 .. 1985-11-30T18:00]
+           e5.oper.an.sfc.128_137_tcwv.ll025sc.198512_remap_180x360.nc: 124 steps [1985-12-01T00:00 .. 1985-12-31T18:00]
+      z: files=24   in-range-steps=2924   
+           e5.oper.an.pl.128_129_z.ll025sc.198401_remap_180x360MODIS.nc: 124 steps [1984-01-01T00:00 .. 1984-01-31T18:00]
+           e5.oper.an.pl.128_129_z.ll025sc.198402_remap_180x360MODIS.nc: 116 steps [1984-02-01T00:00 .. 1984-02-29T18:00]
+           e5.oper.an.pl.128_129_z.ll025sc.198403_remap_180x360MODIS.nc: 124 steps [1984-03-01T00:00 .. 1984-03-31T18:00]
+           ...
+           e5.oper.an.pl.128_129_z.ll025sc.198510_remap_180x360MODIS.nc: 124 steps [1985-10-01T00:00 .. 1985-10-31T18:00]
+           e5.oper.an.pl.128_129_z.ll025sc.198511_remap_180x360MODIS.nc: 120 steps [1985-11-01T00:00 .. 1985-11-30T18:00]
+           e5.oper.an.pl.128_129_z.ll025sc.198512_remap_180x360MODIS.nc: 124 steps [1985-12-01T00:00 .. 1985-12-31T18:00]
+      q: files=24   in-range-steps=2924   
+           e5.oper.an.pl.128_133_q.ll025sc.198401_remap_180x360MODIS.nc: 124 steps [1984-01-01T00:00 .. 1984-01-31T18:00]
+           e5.oper.an.pl.128_133_q.ll025sc.198402_remap_180x360MODIS.nc: 116 steps [1984-02-01T00:00 .. 1984-02-29T18:00]
+           e5.oper.an.pl.128_133_q.ll025sc.198403_remap_180x360MODIS.nc: 124 steps [1984-03-01T00:00 .. 1984-03-31T18:00]
+           ...
+           e5.oper.an.pl.128_133_q.ll025sc.198510_remap_180x360MODIS.nc: 124 steps [1985-10-01T00:00 .. 1985-10-31T18:00]
+           e5.oper.an.pl.128_133_q.ll025sc.198511_remap_180x360MODIS.nc: 120 steps [1985-11-01T00:00 .. 1985-11-30T18:00]
+           e5.oper.an.pl.128_133_q.ll025sc.198512_remap_180x360MODIS.nc: 124 steps [1985-12-01T00:00 .. 1985-12-31T18:00]
+      t: files=24   in-range-steps=2924   
+           e5.oper.an.pl.128_130_t.ll025sc.198401_remap_180x360MODIS.nc: 124 steps [1984-01-01T00:00 .. 1984-01-31T18:00]
+           e5.oper.an.pl.128_130_t.ll025sc.198402_remap_180x360MODIS.nc: 116 steps [1984-02-01T00:00 .. 1984-02-29T18:00]
+           e5.oper.an.pl.128_130_t.ll025sc.198403_remap_180x360MODIS.nc: 124 steps [1984-03-01T00:00 .. 1984-03-31T18:00]
+           ...
+           e5.oper.an.pl.128_130_t.ll025sc.198510_remap_180x360MODIS.nc: 124 steps [1985-10-01T00:00 .. 1985-10-31T18:00]
+           e5.oper.an.pl.128_130_t.ll025sc.198511_remap_180x360MODIS.nc: 120 steps [1985-11-01T00:00 .. 1985-11-30T18:00]
+           e5.oper.an.pl.128_130_t.ll025sc.198512_remap_180x360MODIS.nc: 124 steps [1985-12-01T00:00 .. 1985-12-31T18:00]
+      u: files=24   in-range-steps=2924   
+           e5.oper.an.pl.128_131_u.ll025uv.198401_remap_180x360MODIS.nc: 124 steps [1984-01-01T00:00 .. 1984-01-31T18:00]
+           e5.oper.an.pl.128_131_u.ll025uv.198402_remap_180x360MODIS.nc: 116 steps [1984-02-01T00:00 .. 1984-02-29T18:00]
+           e5.oper.an.pl.128_131_u.ll025uv.198403_remap_180x360MODIS.nc: 124 steps [1984-03-01T00:00 .. 1984-03-31T18:00]
+           ...
+           e5.oper.an.pl.128_131_u.ll025uv.198510_remap_180x360MODIS.nc: 124 steps [1985-10-01T00:00 .. 1985-10-31T18:00]
+           e5.oper.an.pl.128_131_u.ll025uv.198511_remap_180x360MODIS.nc: 120 steps [1985-11-01T00:00 .. 1985-11-30T18:00]
+           e5.oper.an.pl.128_131_u.ll025uv.198512_remap_180x360MODIS.nc: 124 steps [1985-12-01T00:00 .. 1985-12-31T18:00]
+      v: files=24   in-range-steps=2924   
+           e5.oper.an.pl.128_132_v.ll025uv.198401_remap_180x360MODIS.nc: 124 steps [1984-01-01T00:00 .. 1984-01-31T18:00]
+           e5.oper.an.pl.128_132_v.ll025uv.198402_remap_180x360MODIS.nc: 116 steps [1984-02-01T00:00 .. 1984-02-29T18:00]
+           e5.oper.an.pl.128_132_v.ll025uv.198403_remap_180x360MODIS.nc: 124 steps [1984-03-01T00:00 .. 1984-03-31T18:00]
+           ...
+           e5.oper.an.pl.128_132_v.ll025uv.198510_remap_180x360MODIS.nc: 124 steps [1985-10-01T00:00 .. 1985-10-31T18:00]
+           e5.oper.an.pl.128_132_v.ll025uv.198511_remap_180x360MODIS.nc: 120 steps [1985-11-01T00:00 .. 1985-11-30T18:00]
+           e5.oper.an.pl.128_132_v.ll025uv.198512_remap_180x360MODIS.nc: 124 steps [1985-12-01T00:00 .. 1985-12-31T18:00]
+
+  Cross-variable: intersection=2924 steps
+    All variables share an identical timestamp set -> hypothesis B (cross-variable misalignment) REFUTED for this range.
+
+==============================================================================
+STAGE 2 - RAW VALUE SCAN (up to 6 files/var, evenly spaced)
+==============================================================================
+     2t (      t2): scanned 6 files, 48M vals | NaN=0 Inf=0 extreme=0 | range=[194.1, 322.6] mean~278.1
+    10u (     u10): scanned 6 files, 48M vals | NaN=0 Inf=0 extreme=0 | range=[-33.89, 27.64] mean~-0.05041
+    10v (     v10): scanned 6 files, 48M vals | NaN=0 Inf=0 extreme=0 | range=[-31.81, 27.53] mean~0.1098
+    msl (      ps): scanned 6 files, 48M vals | NaN=0 Inf=0 extreme=0 | range=[5.07e+04, 1.054e+05] mean~9.666e+04
+    ttr ( mtnlwrf): scanned 6 files, 48M vals | NaN=0 Inf=0 extreme=0 | range=[-403, -72.68] mean~-225.9
+   tcwv (    tcwv): scanned 6 files, 48M vals | NaN=0 Inf=0 extreme=0 | range=[0.04774, 85.6] mean~18.08
+      z (       z): scanned 6 files, 1391M vals | NaN=0 Inf=0 extreme=17 | range=[-6133, 2.081e+05] mean~6.53e+04  <-- 17 values outside sane range (e5.oper.an.pl.128_129_z.ll025sc.198406_remap_180x360MODIS.nc)
+      q (       q): scanned 6 files, 1391M vals | NaN=0 Inf=0 extreme=0 | range=[-1.066e-05, 0.02602] mean~0.002226
+      t (       t): scanned 6 files, 1391M vals | NaN=0 Inf=0 extreme=0 | range=[177.2, 321.8] mean~248.7
+      u (       u): scanned 6 files, 1391M vals | NaN=0 Inf=0 extreme=0 | range=[-65.02, 115.3] mean~5.969
+      v (       v): scanned 6 files, 1391M vals | NaN=0 Inf=0 extreme=0 | range=[-88.43, 93.95] mean~0.03485
+
+==============================================================================
+VERDICT: 1 FINDING(S):
+  * z: 17 extreme values
+
+Interpretation guide:
+  - out-of-range timesteps        -> leakage / glob over-match (fixed by v3 dataset)
+  - timestamp set differs         -> hypothesis B confirmed (fixed by v3 dataset)
+  - NaN/Inf/extremes in raw scan  -> hypothesis A confirmed (v3 zeroes them; consider
+                                     excluding affected files/years from val)
+  - non-finite only at stage 4    -> model/normalization-side, not data

@@ -34,7 +34,7 @@ from aurora.normalisation import locations, scales
 
 # Aurora's built-in default surface variables (from Aurora.__init__ signature).
 # Any variable in our config's surface_variables list that is NOT here was
-# newly added and its embedding weights were randomly initialized — those
+# newly added and its embedding weights were randomly initialized  - those
 # must remain trainable.
 _AURORA_DEFAULT_SURF_VARS: frozenset[str] = frozenset({"2t", "10u", "10v", "msl"})
 
@@ -136,7 +136,7 @@ class AuroraMJO(nn.Module):
     Config keys recognised
     ----------------------
     model_type : str
-        ``'huge'`` → ``Aurora``, anything else → ``AuroraSmallPretrained``.
+        ``'huge'`` -> ``Aurora``, anything else -> ``AuroraSmallPretrained``.
     surface_variables : list[str]
         Which surface variables to pass.
     use_lora : bool
@@ -174,7 +174,7 @@ class AuroraMJO(nn.Module):
         When the MJO head is enabled the encoder latent is intercepted via a
         forward hook, the Aurora backbone still runs its full decoder, and the
         return value is ``(pred_batch, mjo_pred)`` where ``mjo_pred`` has
-        shape ``(B, 3)`` → ``[RMM1, RMM2, Amplitude]``.
+        shape ``(B, 3)`` -> ``[RMM1, RMM2, Amplitude]``.
 
         Args:
             batch (:class:`aurora.batch.Batch`): Input batch.
@@ -198,7 +198,7 @@ class AuroraMJO(nn.Module):
         hook_handle = self.backbone.encoder.register_forward_hook(_hook)
 
         try:
-            # Run the full backbone (encoder → swin → decoder).
+            # Run the full backbone (encoder -> swin -> decoder).
             pred_batch = self.backbone(batch)
         finally:
             hook_handle.remove()
@@ -310,6 +310,57 @@ def freeze_backbone(
                     "surf_token_embeds.weights; skipping unfreeze."
                 )
 
+    # --- Step 4 (BUG FIX): unfreeze DECODER heads of injected variables ---
+    # The decoder's per-variable output heads (backbone.decoder.surf_heads)
+    # for ttr/tcwv are also newly created and randomly initialized  - the
+    # pretrained checkpoint has no entry for them (they appeared as the
+    # "missing keys" in the job-52565795 resume crash). The old code left
+    # them FROZEN at random init, so the model could never learn to predict
+    # ttr/tcwv: their grid-loss contribution was a large irreducible floor
+    # (a major part of the val loss ~1.8e4). They must train alongside the
+    # new encoder embeddings.
+    if injected_vars:
+        surf_heads = getattr(backbone.decoder, "surf_heads", None)
+        if surf_heads is not None:
+            for var in injected_vars:
+                if var in surf_heads:
+                    for p in surf_heads[var].parameters():
+                        p.requires_grad_(True)
+                    print(f"[freeze_backbone] Unfroze decoder head for '{var}'")
+                else:
+                    print(
+                        f"[freeze_backbone] WARNING: '{var}' not found in "
+                        "decoder.surf_heads; skipping unfreeze."
+                    )
+        else:
+            print("[freeze_backbone] WARNING: backbone.decoder.surf_heads "
+                  "not found; injected-variable decoder heads NOT unfrozen.")
+
+    # --- Step 5 (FIX 6, AURORA_MJO_GAMEPLAN §Finding 6): unfreeze the `msl`
+    # decoder head. ---
+    # `msl` is a *default* Aurora surface variable (in
+    # `_AURORA_DEFAULT_SURF_VARS`), so it is never touched by the
+    # injected-vars logic in Steps 3-4 above. But our dataset feeds `msl`
+    # real surface-pressure (`ps`) values as a proxy for mean-sea-level
+    # pressure (LANL has no true MSL field) - see FIX 2 / dataset.py. Once
+    # the *input* normalization stats are corrected from MSL to ps
+    # statistics, the *output* head is still frozen at its pretrained,
+    # MSL-calibrated weights: it would keep emitting MSL-scaled values
+    # (denormalized with ps stats -> ~7x too spread out), inflating grid
+    # loss over high terrain even though the input trigger is fixed.
+    # Unfreezing lets the head re-learn ps-scaled output so the channel is
+    # coherent end-to-end. Parameter count is small; risk is low.
+    msl_surf_heads = getattr(backbone.decoder, "surf_heads", None)
+    if msl_surf_heads is not None and "msl" in msl_surf_heads:
+        for p in msl_surf_heads["msl"].parameters():
+            p.requires_grad_(True)
+        print("[freeze_backbone] Unfroze decoder head for 'msl' (FIX 6: "
+              "renormalized as surface pressure proxy)")
+    else:
+        print("[freeze_backbone] WARNING: 'msl' not found in "
+              "decoder.surf_heads; msl decoder head NOT unfrozen (FIX 6 "
+              "not applied).")
+
 
 def _log_param_counts(model: nn.Module, label: str = "model") -> None:
     """Print a summary of trainable vs total parameter counts.
@@ -384,10 +435,10 @@ def load_model(config: dict, norm_stats: Optional[dict] = None) -> AuroraMJO:
             locations[var_name] = stats["mean"]
             scales[var_name] = stats["std"]
             print(f"   - {var_name}: mean={stats['mean']:.4f}, std={stats['std']:.4f}")
-
+    
     if config.get("gradient_checkpointing", False):
         print("Enabling gradient checkpointing")
-        backbone.configure_activation_checkpointing()
+        backbone.configure_activation_checkpointing(module_names=("Swin3DTransformerBackbone",))
 
     # ------------------------------------------------------------------
     # LoRA-aware weight freezing
@@ -405,7 +456,7 @@ def load_model(config: dict, norm_stats: Optional[dict] = None) -> AuroraMJO:
             use_lora=config["use_lora"],
         )
     else:
-        print("WARNING: freeze_backbone=False — full backbone will be trained.")
+        print("WARNING: freeze_backbone=False  - full backbone will be trained.")
 
     # ------------------------------------------------------------------
     # MJO head (optional)
@@ -414,8 +465,8 @@ def load_model(config: dict, norm_stats: Optional[dict] = None) -> AuroraMJO:
     head_cfg = config.get("mjo_head", {})
     if head_cfg.get("enabled", False):
         # embed_dim differs by model size:
-        #   AuroraSmallPretrained → 256
-        #   Aurora (huge)         → 512
+        #   AuroraSmallPretrained -> 256
+        #   Aurora (huge)         -> 512
         embed_dim = backbone.encoder.embed_dim
         mjo_head = MJOHead(
             embed_dim=embed_dim,
@@ -441,3 +492,4 @@ def load_model(config: dict, norm_stats: Optional[dict] = None) -> AuroraMJO:
     _log_param_counts(model, label="AuroraMJO")
 
     return model
+    

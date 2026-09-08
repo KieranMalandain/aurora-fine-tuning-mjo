@@ -1,0 +1,11 @@
+{
+  "size": "small",
+  "status": "OK",
+  "peak_mem_gib": 39.706,
+  "mean_step_s": 0.6943,
+  "steps_measured": 27,
+  "steps_completed": 30,
+  "n_trainable_params": 41008,
+  "nonfinite_grad_skips": 30,
+  "total_gpu_gib": 79.2
+}

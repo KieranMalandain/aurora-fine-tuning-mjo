@@ -1,0 +1,7 @@
+{
+  "size": "huge",
+  "status": "OOM",
+  "peak_mem_gib": 78.41,
+  "steps_completed": 3,
+  "n_trainable_params": 81968
+}

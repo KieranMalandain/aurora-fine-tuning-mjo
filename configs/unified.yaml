@@ -1,0 +1,196 @@
+# configs/unified.yaml — v3
+# ONE config, four modes. Select with: train.py --config configs/unified.yaml --mode <m>
+#
+# v3 changes vs v2 (each maps to campaign-debugging-handoff.md):
+#   * gradient_checkpointing: false EVERYWHERE — checkpointing deterministically
+#     triggers an illegal memory access on Perlmutter (handoff §2). Verified:
+#     baseline runs cleanly without it.
+#   * lora/combined use rollout.backprop: "detached" — per-step backward with
+#     detached state advance. Activation memory is O(1) in k (same ~40 GB
+#     footprint as single-step), so checkpointing is not needed for rollout
+#     either. Switch back to "full" ONLY after tools/repro_ima_matrix.py finds
+#     a crash-free configuration (then auto_scale_memory re-enables ckpt).
+#   * training.sdpa_backend: "default". Set to "math" as the first-line
+#     workaround if the IMA ever reappears (disables the suspect
+#     mem-efficient attention backward).
+#
+# Mode chain: baseline -> physics_informed (warm-start) -> lora (warm-start)
+#             -> combined (warm-start from lora).
+# `--resume auto` always prefers a mode's OWN checkpoints once they exist.
+
+experiment:
+  name: "aurora_mjo_unified"
+  seed: 42
+
+data:
+  use_dummy: false
+  root: /global/cfs/cdirs/m4946/xiaoming/zm4946.MachLearn/PrcsPrep/prcs.ERA5/prcs.ERA5.Remap/Results
+  slt_path: /pscratch/sd/k/kam352/Aurora/slt/slt_data.nc
+  dummy:
+    surface_files: []
+    pressure_files: []
+    static_file: ""
+  real:
+    train_years: [1980, 2015]
+    val_years:   [2016, 2019]
+    test_years:  [2020, 2023]
+  batch_size: 1
+  num_workers: 4
+  prefetch_factor: 4
+  pin_memory: true
+
+model:
+  model_type: "small"
+  use_lora: false
+  lora_mode: "single"
+  gradient_checkpointing: false   # v3: OFF — triggers IMA (handoff §2)
+  surface_variables: ["2t", "10u", "10v", "msl", "ttr", "tcwv"]
+  norm_stats:
+    # FIX 2 (AURORA_MJO_GAMEPLAN §Finding 1 / FIX 2): dataset.py maps 'msl'
+    # to LANL's surface-pressure ('ps') field as a proxy (true MSL is not
+    # in the LANL archive), but Aurora's built-in normalisation constants
+    # for 'msl' are MSL-calibrated (mean=100958, scale=1332). That drives
+    # every high-terrain input to ~-36 sigma and is the confirmed trigger
+    # for the 100%-non-finite validation. Overriding here forces Aurora's
+    # global locations/scales dict to use ps-appropriate stats instead.
+    #
+    # PLACEHOLDER — these are Aurora's own built-in 'sp' (surface pressure)
+    # stats, used as the FIX-2 fallback (pulls msl to ~-4.6 sigma, "good
+    # enough to unblock" per gameplan). Task A2 must replace these with the
+    # exact ps mean/std computed over the training years via:
+    #   python calc_norm_stats.py --config phase1_baseline.yaml
+    # then copy the printed mean/std into this block before any real
+    # training run (Session A must not proceed past the smoke test on the
+    # placeholder values without re-checking this TODO).
+    msl:  { mean: 96667.9822, std: 9504.6359 }
+    ttr:  { mean: -226.0498, std: 49.2158 }
+    tcwv: { mean: 18.2967,   std: 16.3265 }
+  mjo_head:
+    enabled: false
+
+loss:
+  grid:
+    enabled: true
+    tropics_bbox: [-20, 20]
+    tropics_weight: 1.0
+    extratropics_weight: 0.1
+  spectral:         { enabled: false, weight: 0.0 }
+  mjo_head:         { enabled: false, weight: 0.0 }
+  moisture_budget:  { enabled: false, weight: 0.0 }
+
+training:
+  epochs: 3
+  target_effective_batch: 8
+  grad_accum_steps: 2            # overwritten by auto-scaling
+  max_grad_norm: 1.0
+  use_amp: true
+  sdpa_backend: "default"        # set "math" if the checkpointing IMA reappears
+  max_steps_per_epoch: 2500
+  max_val_batches: 200           # v3: now evenly spread across 2016–2019
+  time_limit_hours: 11.0
+
+  optimizer:
+    name: "adamw"
+    lr: 1.0e-4
+    weight_decay: 1.0e-5
+    betas: [0.9, 0.999]
+  scheduler:
+    name: "cosine"
+    warmup_steps: 100
+    eta_min: 1.0e-6
+  rollout:
+    enabled: false
+    backprop: "detached"         # "detached" (O(1) mem, no ckpt) | "full" (BPTT)
+    start_steps: 1
+    max_steps: 4
+    step_increase_every_n_epochs: 1
+    step_loss_weighting: "uniform"
+
+checkpointing:
+  save_dir: "checkpoints/unified"
+  save_every_n_steps: 500
+  plateau_window: 200
+  plateau_rel_delta: 0.01
+  keep_last_n: 3
+
+logging:
+  log_every_n_steps: 100
+  val_every_n_epochs: 1
+  use_wandb: false
+  project: "aurora-mjo"
+
+# ===========================================================================
+# MODE OVERLAYS
+# ===========================================================================
+modes:
+
+  baseline:
+    experiment: { name: "phase1_baseline" }
+    checkpointing: { save_dir: "checkpoints/baseline" }
+    training:
+      epochs: 3
+      optimizer: { lr: 1.0e-4 }
+
+  physics_informed:
+    experiment:
+      name: "phase2_physics"
+      init_from: "latest:checkpoints/baseline"
+    checkpointing: { save_dir: "checkpoints/physics_informed" }
+    loss:
+      moisture_budget:
+        enabled: true
+        weight: 0.01
+        tropics_bbox: [-20, 20]
+        dt_seconds: 21600
+    training:
+      epochs: 3
+      optimizer: { lr: 5.0e-5 }
+
+  lora:
+    experiment:
+      name: "phase2_rollout_lora"
+      init_from: "latest:checkpoints/baseline"
+    checkpointing: { save_dir: "checkpoints/lora" }
+    model:
+      use_lora: true
+      lora_mode: "single"
+      gradient_checkpointing: false     # detached rollout does not need it
+    training:
+      epochs: 4
+      optimizer: { lr: 5.0e-5 }
+      scheduler: { warmup_steps: 200 }
+      rollout:
+        enabled: true
+        backprop: "detached"
+        start_steps: 1
+        max_steps: 4
+        step_increase_every_n_epochs: 1
+        step_loss_weighting: "uniform"
+
+  combined:
+    experiment:
+      name: "phase3_combined"
+      init_from: "latest:checkpoints/lora"
+    checkpointing: { save_dir: "checkpoints/combined", keep_last_n: 5 }
+    model:
+      use_lora: true
+      lora_mode: "single"
+      gradient_checkpointing: false
+    loss:
+      moisture_budget:
+        enabled: true
+        weight: 0.01
+        tropics_bbox: [-20, 20]
+        dt_seconds: 21600
+    training:
+      epochs: 6
+      optimizer: { lr: 3.0e-5 }
+      scheduler: { warmup_steps: 100 }
+      rollout:
+        enabled: true
+        backprop: "detached"
+        start_steps: 2
+        max_steps: 4
+        step_increase_every_n_epochs: 1
+        step_loss_weighting: "final_heavy"
+        
