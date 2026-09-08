@@ -142,8 +142,8 @@ def _install_smoke_test_loader(cfg: dict, device: torch.device):
     from aurora import Batch, Metadata
     import datetime
 
-    # Tiny spatial resolution for speed
-    H, W = 8, 16
+    # Tiny spatial resolution for speed, but large enough for Swin3D downsampling
+    H, W = 64, 128
     LEVELS = (50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 850, 925, 1000)
     # Read surface vars from config (already stripped of ttr/tcwv by _patch_config)
     SURF_KEYS  = tuple(cfg["model"]["surface_variables"])
@@ -293,7 +293,8 @@ def main(argv=None):
     # ------------------------------------------------------------------
     model = model.to(device)
     if use_ddp:
-        model = DDP(model, device_ids=[local_rank], find_unused_parameters=True)
+        has_mjo_head = cfg.get("model", {}).get("mjo_head", {}).get("enabled", False)
+        model = DDP(model, device_ids=[local_rank], find_unused_parameters=has_mjo_head)
         log.info("Model wrapped in DistributedDataParallel")
 
     # ------------------------------------------------------------------

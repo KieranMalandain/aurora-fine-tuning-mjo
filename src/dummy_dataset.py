@@ -62,18 +62,20 @@ def load_and_combine_files(file_list, engine='netcdf4'):
         raise e
 
 class MJODataset(Dataset):
-    def __init__(self, surface_ds, pressure_ds, static_file_path):
+    def __init__(self, surface_ds, pressure_ds, static_file_path, max_rollout_steps: int = 1):
         """
         Args:
             surface_ds (xr.Dataset): Time-sliced surface data
             pressure_ds (xr.Dataset): Time-sliced atmospheric data
             static_file_path (str or Path): Path to static.nc data file
+            max_rollout_steps (int): Number of future steps to predict
         """
         self.surface_ds = surface_ds
         self.pressure_ds = pressure_ds
         self.static_vars = self._load_static_vars(static_file_path)
 
-        self.num_samples = len(self.surface_ds['time']) - 2
+        self.max_rollout_steps = max(1, max_rollout_steps)
+        self.num_samples = len(self.surface_ds['time']) - 1 - self.max_rollout_steps
         self.lat = torch.from_numpy(surface_ds['latitude'].values)
         self.lon = torch.from_numpy(surface_ds['longitude'].values)
 
@@ -113,12 +115,8 @@ class MJODataset(Dataset):
     
     def __getitem__(self, idx):
         input_slice = slice(idx, idx+2)
-        target_slice = slice(idx+2, idx+3)
-
         surf_data = self.surface_ds.isel(time=input_slice).load()
-        surf_target = self.surface_ds.isel(time=target_slice).load()
         pres_data = self.pressure_ds.isel(time=input_slice).load()
-        pres_target = self.pressure_ds.isel(time=target_slice).load()
 
         def clean(arr):
             return torch.nan_to_num(torch.from_numpy(arr.astype(np.float32)))
@@ -164,19 +162,26 @@ class MJODataset(Dataset):
             )
         )        
 
-        target_dict = {}
-        for era_name, aurora_name in SURFACE_VAR_MAP.items():
-            if era_name in surf_target:
-                target_dict[aurora_name] = process_var(
-                    era_name, surf_target[era_name].values
-                )
-        for era_name, aurora_name in ATMOS_VAR_MAP.items():
-            if era_name in pres_target:
-                target_dict[aurora_name] = process_var(
-                    era_name, pres_target[era_name].values
-                )
+        target_dict_list = []
+        for step in range(self.max_rollout_steps):
+            target_slice = slice(idx+2+step, idx+3+step)
+            surf_target = self.surface_ds.isel(time=target_slice).load()
+            pres_target = self.pressure_ds.isel(time=target_slice).load()
+
+            target_dict = {}
+            for era_name, aurora_name in SURFACE_VAR_MAP.items():
+                if era_name in surf_target:
+                    target_dict[aurora_name] = process_var(
+                        era_name, surf_target[era_name].values
+                    )
+            for era_name, aurora_name in ATMOS_VAR_MAP.items():
+                if era_name in pres_target:
+                    target_dict[aurora_name] = process_var(
+                        era_name, pres_target[era_name].values
+                    )
+            target_dict_list.append(target_dict)
         
-        return in_batch, target_dict
+        return in_batch, target_dict_list
     
     def collate_fn(batch_list):
         """

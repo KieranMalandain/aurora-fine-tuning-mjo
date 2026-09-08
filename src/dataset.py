@@ -125,7 +125,8 @@ class LANLMJODataset(Dataset):
 
     def __init__(self, start_year: int, end_year: int,
                  root_dir: str | Path | None = None,
-                 slt_path: str | Path | None = None):
+                 slt_path: str | Path | None = None,
+                 max_rollout_steps: int = 1):
         if root_dir is None:
             warnings.warn(
                 f"root_dir not provided; falling back to default NERSC path: {_DEFAULT_NERSC_ROOT}. "
@@ -145,6 +146,7 @@ class LANLMJODataset(Dataset):
 
         self.start_year = start_year
         self.end_year = end_year
+        self.max_rollout_steps = max(1, max_rollout_steps)
 
         print(f"Initializing LANL MJO Dataset ({start_year}-{end_year})...")
 
@@ -167,7 +169,7 @@ class LANLMJODataset(Dataset):
         ref_var = next(iter(self.surf_file_map))
         ref_files = self.surf_file_map[ref_var][0]
         self._index_map = self._build_index_map(ref_files)
-        self.num_samples = len(self._index_map) - 2
+        self.num_samples = len(self._index_map) - 1 - self.max_rollout_steps
 
         # 4. Determine pressure-level indices for subsetting the 29-level LANL
         #    data to the 13 Aurora levels.  Only needs one file probe.
@@ -325,25 +327,19 @@ class LANLMJODataset(Dataset):
 
     def __getitem__(self, idx):
         input_indices = [idx, idx + 1]
-        target_indices = [idx + 2]
 
         def process_var(arr):
             """Clean NaNs, convert to tensor.  NO upsampling — data stays at 1°."""
             return torch.nan_to_num(torch.from_numpy(arr))
 
-        # --- Surface variables ---
+        # --- Surface input variables ---
         surf_in = {}
-        surf_out = {}
         for aurora_name, (files, native_name) in self.surf_file_map.items():
             raw_in = self._read_var_at_indices(files, native_name, input_indices)
             surf_in[aurora_name] = process_var(raw_in)[None]   # (1, 2, H, W) with batch dim
 
-            raw_tgt = self._read_var_at_indices(files, native_name, target_indices)
-            surf_out[aurora_name] = process_var(raw_tgt)       # (1, H, W)
-
-        # --- Atmospheric variables ---
+        # --- Atmospheric input variables ---
         atmos_in = {}
-        atmos_out = {}
         for aurora_name, (files, native_name) in self.atmos_file_map.items():
             raw_in = self._read_var_at_indices(files, native_name, input_indices)
             # Subset pressure levels: (T, 29, Lat, Lon) → (T, 13, Lat, Lon)
@@ -351,15 +347,27 @@ class LANLMJODataset(Dataset):
                 raw_in = raw_in[:, self._plev_indices, :, :]
             atmos_in[aurora_name] = process_var(raw_in)[None]  # (1, 2, 13, H, W)
 
-            raw_tgt = self._read_var_at_indices(files, native_name, target_indices)
-            if self._plev_indices:
-                raw_tgt = raw_tgt[:, self._plev_indices, :, :]
-            atmos_out[aurora_name] = process_var(raw_tgt)      # (1, 13, H, W)
+        # --- Multi-step targets (one dict per rollout step) ---
+        surf_targets_list = []
+        atmos_targets_list = []
+        for step in range(self.max_rollout_steps):
+            target_idx = [idx + 2 + step]
+
+            surf_out = {}
+            for aurora_name, (files, native_name) in self.surf_file_map.items():
+                raw_tgt = self._read_var_at_indices(files, native_name, target_idx)
+                surf_out[aurora_name] = process_var(raw_tgt)       # (1, H, W)
+            surf_targets_list.append(surf_out)
+
+            atmos_out = {}
+            for aurora_name, (files, native_name) in self.atmos_file_map.items():
+                raw_tgt = self._read_var_at_indices(files, native_name, target_idx)
+                if self._plev_indices:
+                    raw_tgt = raw_tgt[:, self._plev_indices, :, :]
+                atmos_out[aurora_name] = process_var(raw_tgt)      # (1, 13, H, W)
+            atmos_targets_list.append(atmos_out)
 
         # --- Time tag ---
-        # ADDRESSING THE ADDENDUM: Time Tags
-        # ClimaX loses time tags. Aurora requires them. We explicitly pass the initialization time here.
-        # batch.metadata.time[0] will be the exact initialization time.
         fi, li = self._index_map[input_indices[1]]
         ref_files = list(self.surf_file_map.values())[0][0]
         with xr.open_dataset(str(ref_files[fi]), engine="netcdf4") as ds:
@@ -372,13 +380,13 @@ class LANLMJODataset(Dataset):
             metadata=Metadata(
                 lat=self.lat,
                 lon=self.lon,
-                time=(init_time,),  # The crucial Initialization Time Tag
+                time=(init_time,),
                 atmos_levels=self.atmos_levels,
                 rollout_step=0
             )
         )
 
-        return in_batch, surf_out, atmos_out
+        return in_batch, surf_targets_list, atmos_targets_list
 
 
 def collate_fn(batch_list):

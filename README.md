@@ -16,7 +16,7 @@ The **Madden-Julian Oscillation (MJO)** is the dominant mode of intra-seasonal v
 This project investigates the efficacy of **Foundation Models** for this task. Unlike traditional statistical approaches that regress on anomalies, we treat MJO forecasting as a **physics-consistent initial value problem**. By fine-tuning **Microsoft Aurora**—a 3D Swin Transformer pre-trained on petabytes of atmospheric data—we aim to extend skillful MJO prediction out to 30+ days.
 
 ### Key Objectives
-1.  **Engineering:** Build a robust HPC pipeline to fine-tune billion-parameter models on the Yale Bouchet Cluster using H200 GPUs.
+1.  **Engineering:** Build a robust HPC pipeline to fine-tune billion-parameter models on NERSC Perlmutter using A100 GPUs.
 2.  **Methodology:** Pivot from statistical emulation (anomaly mapping) to prognostic simulation (raw physical state stepping).
 3.  **Performance:** Achieve an RMM Index correlation of $r > 0.5$ at a 30-day lead time.
 
@@ -44,13 +44,14 @@ aurora-fine-tuning-mjo/
 │   ├── evaluate_mjo.py          # Primary formal MJO skill capability evaluation
 │   └── smoke_test_*.py          # Autoregressive & LoRA freezing unit tests
 │
-├── slurm/                       # INFRASTRUCTURE
-│   ├── train.slurm              # The generic submission script
+├── slurm_scripts/               # INFRASTRUCTURE
+│   ├── train_rollout.slurm      # Main training submission script
 │   └── eval.slurm               # The evaluation submission script
 │
 ├── src/                         # CORE LOGIC (The Engine)
 │   ├── __init__.py
-│   ├── dataset.py               # The MJODataset class (Lazy Loading)
+│   ├── dataset.py               # LANLMJODataset (NERSC Production Lazy Loading)
+│   ├── dummy_dataset.py         # MJODataset (Local Bouchet testing)
 │   ├── model.py                 # Aurora wrapper (MJO Head, LoRA freeze setup)
 │   ├── loss.py                  # Custom losses (Spectral + Moisture Budget)
 │   └── trainer.py               # Rollout timeline logic, dictionary loss accumulation
@@ -109,7 +110,7 @@ This work is conducted at **Yale University** as part of the **Lu Research Group
 ## 🚀 Getting Started
 
 ### Prerequisites
-*   Access to a SLURM-based HPC (e.g., Yale Bouchet) with NVIDIA GPUs (e.g., A100, H200).
+*   Access to a SLURM-based HPC (e.g., NERSC Perlmutter) with NVIDIA GPUs (e.g., A100, H200).
 *   Conda / Mamba
 
 ### Installation
@@ -133,7 +134,7 @@ conda activate aurora_mjo
 python scripts/larger_download_era5_sample.py
 
 # 2. Submit Training Job (SLURM)
-sbatch slurm_scripts/investigate_finetuning.slurm
+sbatch slurm_scripts/train_rollout.slurm
 ```
 
 ---

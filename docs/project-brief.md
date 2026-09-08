@@ -68,5 +68,4 @@ Key metrics include:
 ## Human Notes
 
 - **Target Environment:** We are migrating compute from Yale Bouchet to NERSC Perlmutter. Agents should assume NERSC paths (`/global/cfs/cdirs/...`) are the default for new code.
-- **Aurora Wrapper:** The wrapper is currently runnable for single-step physical prediction, but *lacks* the MJO Head and the rollout loop logic.
 - **`compute_rmm.py`:** Is completely placeholder. Building this to generate `(RMM1, RMM2)` targets for our dataset is a blocking priority before we can train the MJO head.

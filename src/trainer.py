@@ -136,13 +136,13 @@ def _align_shapes(pred_t, tgt_t):
     return pred_t, tgt_t
 
 
-def _upsample_batch_gpu(in_batch, surf_targets, atmos_targets, device):
+def _upsample_batch_gpu(in_batch, surf_targets_list, atmos_targets_list, device):
     """Upsample a 1° batch + targets to 0.25° (720×1440) on GPU.
 
     Called when the dataset returns native-resolution data.  Static vars
     are already at 0.25° so they are left untouched.
 
-    Returns (in_batch_upsampled, target_dict) ready for the model.
+    Returns (in_batch_upsampled, target_dict_list) ready for the model.
     """
     from aurora import Batch, Metadata
     TARGET_SIZE = (720, 1440)
@@ -189,13 +189,16 @@ def _upsample_batch_gpu(in_batch, surf_targets, atmos_targets, device):
     )
 
     # Upsample targets
-    target_dict = {}
-    for k, v in surf_targets.items():
-        target_dict[k] = _up(v.to(device))
-    for k, v in atmos_targets.items():
-        target_dict[k] = _up(v.to(device))
+    target_dict_list = []
+    for surf_targets, atmos_targets in zip(surf_targets_list, atmos_targets_list):
+        target_dict = {}
+        for k, v in surf_targets.items():
+            target_dict[k] = _up(v.to(device))
+        for k, v in atmos_targets.items():
+            target_dict[k] = _up(v.to(device))
+        target_dict_list.append(target_dict)
 
-    return up_batch, target_dict
+    return up_batch, target_dict_list
 
 
 def _advance_batch(in_batch, pred_batch, step_index: int):
@@ -277,6 +280,9 @@ def build_dataloader(cfg: dict, split: str) -> DataLoader:
     data_cfg = cfg["data"]
     use_dummy = data_cfg.get("use_dummy", True)
 
+    rollout_cfg = cfg.get("training", {}).get("rollout", {})
+    max_rollout_steps = rollout_cfg.get("max_steps", 1) if rollout_cfg.get("enabled", False) else 1
+
     if use_dummy:
         # --- Dummy dataset (Yale Bouchet one-month ERA5) ---
         from src.dummy_dataset import MJODataset, load_and_combine_files
@@ -294,7 +300,7 @@ def build_dataloader(cfg: dict, split: str) -> DataLoader:
 
         surface_ds = load_and_combine_files(surface_files)
         pressure_ds = load_and_combine_files(pressure_files)
-        dataset = MJODataset(surface_ds, pressure_ds, static_file)
+        dataset = MJODataset(surface_ds, pressure_ds, static_file, max_rollout_steps=max_rollout_steps)
         collate = MJODataset.collate_fn
 
     else:
@@ -314,6 +320,7 @@ def build_dataloader(cfg: dict, split: str) -> DataLoader:
                     end_year=years[1],
                     root_dir=data_cfg.get("root"),
                     slt_path=data_cfg.get("slt_path"),
+                    max_rollout_steps=max_rollout_steps
                 )
         from src.dataset import collate_fn as collate
 
@@ -328,14 +335,16 @@ def build_dataloader(cfg: dict, split: str) -> DataLoader:
         )
         shuffle = False  # sampler handles shuffling
 
+    num_workers = data_cfg.get("num_workers", 2)
     loader = DataLoader(
         dataset,
         batch_size=data_cfg.get("batch_size", 1),
         shuffle=shuffle,
         sampler=sampler,
-        num_workers=data_cfg.get("num_workers", 2),
+        num_workers=num_workers,
         pin_memory=data_cfg.get("pin_memory", True),
         collate_fn=collate,
+        persistent_workers=(num_workers > 0),
     )
     return loader
 
@@ -527,7 +536,7 @@ class Trainer:
     # Forward + loss
     # ------------------------------------------------------------------
 
-    def _compute_loss(self, in_batch, target_dict, epoch: int = 1) -> dict:
+    def _compute_loss(self, in_batch, target_dict_list, epoch: int = 1) -> dict:
         """
         Run one or more forward passes and compute the composite loss.
 
@@ -540,11 +549,9 @@ class Trainer:
 
         Args:
             in_batch:    Initial Aurora Batch (from the DataLoader).
-            target_dict: Dict of target tensors (single-step, from the
-                         DataLoader).  Only used to compute losses against the
-                         *step-1* target; for k > 1 steps we still compare
-                         every prediction against this same target because the
-                         dataset emits only one-step targets.
+            target_dict_list: List of dicts of target tensors (multi-step, from
+                              the DataLoader). Each step compares its prediction
+                              against the corresponding target dict in the list.
             epoch:       Current epoch number (1-indexed) used to look up the
                          curriculum step.
 
@@ -562,6 +569,11 @@ class Trainer:
 
         for step_idx in range(k):
             w = weights[step_idx]
+
+            if isinstance(target_dict_list, dict): # Fallback for single-step dummy loaders
+                target_dict = target_dict_list
+            else:
+                target_dict = target_dict_list[min(step_idx, len(target_dict_list) - 1)]
 
             # ---- Forward pass ----
             model_out = self.model(current_batch)
@@ -581,8 +593,8 @@ class Trainer:
                 if hasattr(pred_batch, "surf_vars"):
                     for var_name, pred_t in pred_batch.surf_vars.items():
                         if var_name in target_dict:
-                            tgt_t = target_dict[var_name].to(self.device)
-                            p = pred_t.to(self.device)
+                            tgt_t = target_dict[var_name].to(self.device).float()
+                            p = pred_t.to(self.device).float()
                             p, tgt_t = _align_shapes(p, tgt_t)
                             var_losses.append(self.grid_loss(p, tgt_t))
 
@@ -590,8 +602,8 @@ class Trainer:
                 if hasattr(pred_batch, "atmos_vars"):
                     for var_name, pred_t in pred_batch.atmos_vars.items():
                         if var_name in target_dict:
-                            tgt_t = target_dict[var_name].to(self.device)
-                            p = pred_t.to(self.device)
+                            tgt_t = target_dict[var_name].to(self.device).float()
+                            p = pred_t.to(self.device).float()
                             p, tgt_t = _align_shapes(p, tgt_t)
                             var_losses.append(self.grid_loss(p, tgt_t))
 
@@ -651,6 +663,15 @@ class Trainer:
         Returns:
             Mean total loss over the epoch.
         """
+        k = self._current_rollout_steps(epoch)
+        if k >= 3 and not getattr(self.model, "_gradient_checkpointing_enabled", False):
+            if hasattr(self.model, "module"):
+                self.model.module.configure_activation_checkpointing()
+            else:
+                self.model.configure_activation_checkpointing()
+            self.model._gradient_checkpointing_enabled = True
+            log.info(f"Auto-enabled gradient checkpointing at rollout step {k}")
+
         self.model.train()
         self.optimizer.zero_grad()
 
@@ -664,25 +685,40 @@ class Trainer:
             self.train_loader.sampler.set_epoch(epoch)
 
         for batch_idx, batch in enumerate(self.train_loader):
-            # Unpack -- dummy_dataset returns (in_batch, target_dict)
-            # real dataset returns   (in_batch, surf_out, atmos_out)
+            # Unpack -- dummy_dataset returns (in_batch, target_dict_list)
+            # real dataset returns   (in_batch, surf_out_list, atmos_out_list)
             if len(batch) == 2:
-                in_batch, target_dict = batch
+                in_batch, target_dict_list = batch
             elif len(batch) == 3:
-                in_batch, surf_out, atmos_out = batch
+                in_batch, surf_out_list, atmos_out_list = batch
+                
+                # Normalize to lists even if it is a single step (for old dummy loaders)
+                if isinstance(surf_out_list, dict):
+                    surf_out_list = [surf_out_list]
+                    atmos_out_list = [atmos_out_list]
+                    
                 # GPU upsample if data is at native 1° resolution
-                needs_upsample = next(iter(surf_out.values())).shape[-1] < 720
+                needs_upsample = next(iter(surf_out_list[0].values())).shape[-1] < 720
                 if needs_upsample:
-                    in_batch, target_dict = _upsample_batch_gpu(
-                        in_batch, surf_out, atmos_out, self.device
+                    in_batch, target_dict_list = _upsample_batch_gpu(
+                        in_batch, surf_out_list, atmos_out_list, self.device
                     )
                 else:
-                    target_dict = {**surf_out, **atmos_out}
+                    target_dict_list = [{**s, **a} for s, a in zip(surf_out_list, atmos_out_list)]
             else:
                 raise ValueError(f"Unexpected batch tuple length: {len(batch)}")
 
+            # Ensure all batch tensors are contiguous and float32 before autocast
+            # to avoid dtype mismatch in cuBLAS under bf16 autocast
+            for k_var in in_batch.surf_vars:
+                in_batch.surf_vars[k_var] = in_batch.surf_vars[k_var].to(self.device).float().contiguous()
+            for k_var in in_batch.atmos_vars:
+                in_batch.atmos_vars[k_var] = in_batch.atmos_vars[k_var].to(self.device).float().contiguous()
+            for k_var in in_batch.static_vars:
+                in_batch.static_vars[k_var] = in_batch.static_vars[k_var].to(self.device).float().contiguous()
+
             with torch.amp.autocast('cuda', enabled=self.use_amp, dtype=self.amp_dtype):
-                losses = self._compute_loss(in_batch, target_dict, epoch=epoch)
+                losses = self._compute_loss(in_batch, target_dict_list, epoch=epoch)
                 loss = losses["total"] / self.grad_accum_steps
 
             self.grad_scaler.scale(loss).backward()
@@ -743,21 +779,34 @@ class Trainer:
 
         for batch in self.val_loader:
             if len(batch) == 2:
-                in_batch, target_dict = batch
+                in_batch, target_dict_list = batch
             elif len(batch) == 3:
-                in_batch, surf_out, atmos_out = batch
-                needs_upsample = next(iter(surf_out.values())).shape[-1] < 720
+                in_batch, surf_out_list, atmos_out_list = batch
+                
+                if isinstance(surf_out_list, dict):
+                    surf_out_list = [surf_out_list]
+                    atmos_out_list = [atmos_out_list]
+                
+                needs_upsample = next(iter(surf_out_list[0].values())).shape[-1] < 720
                 if needs_upsample:
-                    in_batch, target_dict = _upsample_batch_gpu(
-                        in_batch, surf_out, atmos_out, self.device
+                    in_batch, target_dict_list = _upsample_batch_gpu(
+                        in_batch, surf_out_list, atmos_out_list, self.device
                     )
                 else:
-                    target_dict = {**surf_out, **atmos_out}
+                    target_dict_list = [{**s, **a} for s, a in zip(surf_out_list, atmos_out_list)]
             else:
                 raise ValueError(f"Unexpected batch tuple length: {len(batch)}")
 
+            # Ensure all batch tensors are contiguous and float32 before autocast
+            for k_var in in_batch.surf_vars:
+                in_batch.surf_vars[k_var] = in_batch.surf_vars[k_var].to(self.device).float().contiguous()
+            for k_var in in_batch.atmos_vars:
+                in_batch.atmos_vars[k_var] = in_batch.atmos_vars[k_var].to(self.device).float().contiguous()
+            for k_var in in_batch.static_vars:
+                in_batch.static_vars[k_var] = in_batch.static_vars[k_var].to(self.device).float().contiguous()
+
             with torch.amp.autocast('cuda', enabled=self.use_amp, dtype=self.amp_dtype):
-                losses = self._compute_loss(in_batch, target_dict, epoch=epoch)
+                losses = self._compute_loss(in_batch, target_dict_list, epoch=epoch)
             val_loss += losses["total"].item()
 
         mean_val = val_loss / max(num_batches, 1)
