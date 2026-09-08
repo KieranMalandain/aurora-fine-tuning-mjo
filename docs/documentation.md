@@ -16,13 +16,16 @@ aurora-fine-tuning-mjo/
 │   ├── calc_norm_stats.py       # Script to compute mean/std for new vars
 │   ├── compute_rmm.py           # For calculating MJO index
 │   ├── evaluate_mjo.py          # Primary formal MJO skill capability evaluation
+│   ├── explore_nersc_data.py    # Exploratory script for NERSC NetCDF files
 │   ├── smoke_test_freeze.py     # Verify LoRA frozen backbone
 │   ├── smoke_test_mjo_head.py   # Test MJO Head initialization logic
-│   └── smoke_test_rollout.py    # Test autoregressive rollout flow
+│   ├── smoke_test_rollout.py    # Test autoregressive rollout flow
+│   └── verify_dataset_loader.py # Verifies the NERSC dataset loading logic
 │
-├── slurm/                       # INFRASTRUCTURE
+├── slurm_scripts/               # INFRASTRUCTURE
 │   ├── train.slurm              # The generic submission script
-│   └── eval.slurm               # The evaluation submission script
+│   ├── eval.slurm               # The evaluation submission script
+│   └── test_train.slurm         # Short debug-queue script for quick testing
 │
 ├── src/                         # CORE LOGIC (The Engine)
 │   ├── __init__.py
@@ -74,9 +77,9 @@ It is also the case that different ERA5 versions name the vertical axis differen
 
 This gets the data that is needed for just one training step. Here is the only place where we call the `.load()` method to move data from disk -> RAM. Slicing it with `isel` means we are only loading small quantities (~50MB) into the RAM at a time and we shouldn't hit a RAM OOM.
 
-#### Data cleaning `process_var()`
+#### Data cleaning and upsampling
 
-We need to make sure that we do not load NaNs onto the GPU, which will cause illegal memory access CUDA errors. We also scale the OLR variable from energy (unit J) to power (unit W). This is important for consistency and avoiding exploding gradients.
+We need to make sure that we do not load NaNs onto the GPU, which will cause illegal memory access CUDA errors. The dataset heavily relies on `_upsample_to_aurora` to dynamically resample the 1-degree NERSC ERA5 fields up to the 0.25-degree grid natively expected by the Microsoft Aurora checkpoints. Note: TTR (OLR) is provided in $W/m^2$ directly by NERSC, so scaling is no longer necessary.
 
 #### Packaging into a batch `collate_fn()`
 

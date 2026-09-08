@@ -136,7 +136,7 @@ Primary intended metrics:
 - **Pressure Levels:** We slice exactly 13 levels required by Aurora: `[50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 850, 925, 1000]` hPa.
 - **TTR Conversion:** LANL's `mtnlwrf` is already in $W/m^2$. **Do NOT divide by 3600.**
 - **TCWV Injection:** Working. Passed via the `surf_vars` dictionary mapping.
-- **Missing Static Variable:** LANL data lacks `slt` (Soil Type). The DataLoader currently injects a dummy zero-tensor of shape `(720, 1440)` to prevent model crashes. Human is working on obtaining the soil-type data.
+- **Static Variables:** `z` and `lsm` are loaded from the NERSC invariant file. If corrupted, `src/dataset.py` gracefully falls back to dummy zero-tensors. `slt` (Soil Type) is loaded natively at 0.25-degree resolution from a separate downloaded file.
 - **Checkpoint Format:** `microsoft/aurora` (aurora-0.25-pretrained.ckpt). Always loaded with `strict=False` to accommodate the randomly initialized embedding layers for `ttr` and `tcwv`.
 - **Target Architecture (Implemented):** A dual-head system. 
   1. *State Head:* Aurora's default decoder outputting the full grid.

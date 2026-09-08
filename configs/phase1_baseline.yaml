@@ -33,7 +33,7 @@ data:
     test_years:  [2020, 2023]
 
   batch_size: 1                # Aurora is large; effective BS is controlled via grad_accum_steps
-  num_workers: 2
+  num_workers: 4
   pin_memory: true
 
 # ---------------------------------------------------------------------------
@@ -41,7 +41,8 @@ data:
 # ---------------------------------------------------------------------------
 model:
   model_type: "small"          # "small" -> AuroraSmallPretrained, "huge" -> Aurora
-  use_lora: false
+  use_lora: true
+  freeze_backbone: true
   lora_mode: "single"
   gradient_checkpointing: false
 

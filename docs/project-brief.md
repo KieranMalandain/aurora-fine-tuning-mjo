@@ -23,6 +23,7 @@ The repository already contains code for:
 - custom losses
 - training loop infrastructure
 - SLURM submission
+- **Phase 1 Audit**: The repository has been audited for Phase 1 Slurm readiness (optimizer configs fixed, NERSC Slurm scripts populated) and execution tasks have been generated and applied.
 
 The following major Phase 2 milestones are now fully completed and integrated:
 - Build or validate a correct RMM evaluation pipeline
@@ -31,14 +32,7 @@ The following major Phase 2 milestones are now fully completed and integrated:
 - Implement LoRA-based long-horizon specialization
 - Add optional moisture-budget auxiliary loss
 
-Some of this code is out of date relative to the current intended roadmap. In particular, the old code may reflect:
-- single-step fine-tuning assumptions
-- older loss designs
-- no explicit MJO head
-- incomplete or earlier-stage evaluation
-- older cluster/storage assumptions
-
-Agents should treat the existing codebase as partially authoritative:
+Agents should treat the existing codebase as authoritative:
 - existing implementation details are real and should be inspected first
 - roadmap documents are authoritative for future direction
 - if the two conflict, the conflict should be surfaced explicitly before implementation
@@ -68,5 +62,3 @@ Key metrics include:
 ## Human Notes
 
 - **Target Environment:** We are migrating compute from Yale Bouchet to NERSC Perlmutter. Agents should assume NERSC paths (`/global/cfs/cdirs/...`) are the default for new code.
-- **Aurora Wrapper:** The wrapper is currently runnable for single-step physical prediction, but *lacks* the MJO Head and the rollout loop logic.
-- **`compute_rmm.py`:** Is completely placeholder. Building this to generate `(RMM1, RMM2)` targets for our dataset is a blocking priority before we can train the MJO head.

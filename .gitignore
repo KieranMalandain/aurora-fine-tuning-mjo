@@ -26,5 +26,9 @@ slurm_logs/
 *.log
 experiment_outputs/
 
+# Checkpoints
+checkpoints/
+*.pt
+
 # Legacy
 investigation_phase1/
