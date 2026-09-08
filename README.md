@@ -16,7 +16,7 @@ The **Madden-Julian Oscillation (MJO)** is the dominant mode of intra-seasonal v
 This project investigates the efficacy of **Foundation Models** for this task. Unlike traditional statistical approaches that regress on anomalies, we treat MJO forecasting as a **physics-consistent initial value problem**. By fine-tuning **Microsoft Aurora**—a 3D Swin Transformer pre-trained on petabytes of atmospheric data—we aim to extend skillful MJO prediction out to 30+ days.
 
 ### Key Objectives
-1.  **Engineering:** Build a robust HPC pipeline to fine-tune billion-parameter models on the Yale Bouchet Cluster using H200 GPUs.
+1.  **Engineering:** Build a robust HPC pipeline to fine-tune billion-parameter models on the NERSC Perlmutter Cluster using A100 GPUs.
 2.  **Methodology:** Pivot from statistical emulation (anomaly mapping) to prognostic simulation (raw physical state stepping).
 3.  **Performance:** Achieve an RMM Index correlation of $r > 0.5$ at a 30-day lead time.
 
@@ -42,11 +42,14 @@ aurora-fine-tuning-mjo/
 │   ├── calc_norm_stats.py       # Script to compute mean/std for new vars
 │   ├── compute_rmm.py           # For calculating MJO index
 │   ├── evaluate_mjo.py          # Primary formal MJO skill capability evaluation
-│   └── smoke_test_*.py          # Autoregressive & LoRA freezing unit tests
+│   ├── explore_nersc_data.py    # Exploratory script for NERSC NetCDF files
+│   ├── smoke_test_*.py          # Autoregressive & LoRA freezing unit tests
+│   └── verify_dataset_loader.py # Verifies the NERSC dataset loading logic
 │
-├── slurm/                       # INFRASTRUCTURE
+├── slurm_scripts/               # INFRASTRUCTURE
 │   ├── train.slurm              # The generic submission script
-│   └── eval.slurm               # The evaluation submission script
+│   ├── eval.slurm               # The evaluation submission script
+│   └── test_train.slurm         # Short debug-queue script for quick testing
 │
 ├── src/                         # CORE LOGIC (The Engine)
 │   ├── __init__.py
@@ -109,7 +112,7 @@ This work is conducted at **Yale University** as part of the **Lu Research Group
 ## 🚀 Getting Started
 
 ### Prerequisites
-*   Access to a SLURM-based HPC (e.g., Yale Bouchet) with NVIDIA GPUs (e.g., A100, H200).
+*   Access to a SLURM-based HPC (e.g., NERSC Perlmutter) with NVIDIA GPUs (e.g., A100).
 *   Conda / Mamba
 
 ### Installation
@@ -129,11 +132,11 @@ conda activate aurora_mjo
 ### Running the Pipeline
 
 ```bash
-# 1. Download ERA5 Data (requires CDS API key)
-python scripts/larger_download_era5_sample.py
+# 1. Download ERA5 Data (requires CDS API key if not using NERSC pre-downloaded)
+python scripts/download_era5.py
 
 # 2. Submit Training Job (SLURM)
-sbatch slurm_scripts/investigate_finetuning.slurm
+sbatch slurm_scripts/train.slurm
 ```
 
 ---
@@ -151,4 +154,4 @@ sbatch slurm_scripts/investigate_finetuning.slurm
 
 ---
 
-*Last Updated: April 2026*
+*Last Updated: May 2026*

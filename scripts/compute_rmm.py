@@ -107,10 +107,19 @@ _WH_PHASE_EDGES = np.array([0, 45, 90, 135, 180, 225, 270, 315, 360])
 def _glob_year_files(root: Path, step_subdir: str, var_subdir: str, year: int) -> list[Path]:
     """Return sorted list of NetCDF files for one variable/year under root."""
     base = root / step_subdir / var_subdir
-    patterns = [f"*{year}*.nc", f"*{year}*.nc4"]
-    files: list[Path] = []
-    for pat in patterns:
-        files.extend(sorted(base.glob(pat)))
+    
+    # Try year subdirectory first (matches src/dataset.py logic)
+    year_dir = base / str(year)
+    files = sorted(year_dir.glob("*.nc"))
+    if not files:
+        files = sorted(year_dir.glob("*.nc4"))
+        
+    # Fallback to files directly in base directory matching the year
+    if not files:
+        files = sorted(base.glob(f"*{year}*.nc"))
+    if not files:
+        files = sorted(base.glob(f"*{year}*.nc4"))
+        
     return files
 
 

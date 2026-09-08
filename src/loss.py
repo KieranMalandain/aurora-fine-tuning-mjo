@@ -6,26 +6,57 @@ import numpy as np
 
 class TropicalWeightedL1Loss(nn.Module):
     """
-    Standard L1 (MAE) loss, but applies a multiplier to the tropical 
+    Standard L1 (MAE) loss, but applies a multiplier to the tropical
     region to force the model to focus on MJO-relevant latitudes.
+
+    Accepts tensors of any shape as long as one dimension matches the
+    latitude axis length (720 for Aurora 0.25° grid).  Weights are
+    stored as 1-D and reshaped dynamically so the loss works with
+    per-variable inputs of different ranks:
+      - Surface:  (B, H, W)      or (B, 1, H, W)
+      - Atmos:    (B, levels, H, W)
     """
     def __init__(self, lat_coords, tropics_bbox=[-20, 20], tropics_weight=1.0, extratropics_weight=0.1):
         super().__init__()
         self.l1 = nn.L1Loss(reduction='none')
+        self.n_lat = lat_coords.shape[0]
 
         weights = torch.ones_like(lat_coords)
         tropical_mask = (lat_coords >= tropics_bbox[0]) & (lat_coords <= tropics_bbox[1])
-        
+
         weights[tropical_mask] = tropics_weight
         weights[~tropical_mask] = extratropics_weight
-        
-        # Reshape to broadcast over (Batch, Time, Lat, Lon)
-        self.register_buffer('spatial_weights', weights.view(1, 1, -1, 1))
+
+        # Store as 1-D; reshape dynamically in forward().
+        self.register_buffer('lat_weights', weights)  # (H,)
 
     def forward(self, pred, target):
+        """Compute tropically-weighted L1 loss.
+
+        Works with tensors of shape (B, H, W), (B, 1, H, W), or
+        (B, levels, H, W) — any layout where one axis equals ``n_lat``.
+
+        If no dimension matches ``n_lat`` (e.g. synthetic smoke-test
+        data with smaller spatial dims), falls back to uniform weighting.
+        """
         loss = self.l1(pred, target)
-        weighted_loss = loss * self.spatial_weights
-        return weighted_loss.mean()
+
+        # Find the latitude dimension by scanning for the axis whose
+        # size matches self.n_lat.  Skip dim 0 (batch) and last dim (lon).
+        lat_dim = None
+        for d in range(1, loss.ndim - 1):
+            if loss.shape[d] == self.n_lat:
+                lat_dim = d
+                break
+
+        if lat_dim is not None:
+            # Reshape weights to broadcast: (1, ..., n_lat, ..., 1)
+            shape = [1] * loss.ndim
+            shape[lat_dim] = self.n_lat
+            w = self.lat_weights.view(*shape)
+            loss = loss * w
+
+        return loss.mean()
 
 
 class SpectralLoss(nn.Module):
