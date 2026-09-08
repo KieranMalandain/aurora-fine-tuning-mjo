@@ -30,7 +30,7 @@ Intended flow:
 1. Download ERA5 and related variables.
 2. Convert / harmonize fields into the format expected by the dataset.
 3. Compute normalization statistics from training years only.
-4. Load 6-hourly global states through `MJODataset`.
+4. Load 6-hourly global states through `LANLMJODataset` (or `MJODataset` for local testing).
 5. Feed states into Aurora with injected OLR/TTR and TCWV channels.
 6. Predict next-step or rollout states.
 7. Compute gridded and MJO-specific losses.
@@ -136,7 +136,7 @@ Primary intended metrics:
 - **Pressure Levels:** We slice exactly 13 levels required by Aurora: `[50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 850, 925, 1000]` hPa.
 - **TTR Conversion:** LANL's `mtnlwrf` is already in $W/m^2$. **Do NOT divide by 3600.**
 - **TCWV Injection:** Working. Passed via the `surf_vars` dictionary mapping.
-- **Missing Static Variable:** LANL data lacks `slt` (Soil Type). The DataLoader currently injects a dummy zero-tensor of shape `(720, 1440)` to prevent model crashes. Human is working on obtaining the soil-type data.
+- **Missing Static Variable:** LANL data lacks `slt` (Soil Type). However, a separate static `slt_data.nc` file is now provided and correctly loaded by the dataset (via `slt_path`).
 - **Checkpoint Format:** `microsoft/aurora` (aurora-0.25-pretrained.ckpt). Always loaded with `strict=False` to accommodate the randomly initialized embedding layers for `ttr` and `tcwv`.
 - **Target Architecture (Implemented):** A dual-head system. 
   1. *State Head:* Aurora's default decoder outputting the full grid.

@@ -4,7 +4,7 @@
 #SBATCH -q regular
 #SBATCH -t 12:00:00
 #SBATCH -N 1
-#SBATCH --ntasks-per-node=4
+#SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=4
 #SBATCH -c 8
 #SBATCH --mail-user=kieran.malandain@yale.edu

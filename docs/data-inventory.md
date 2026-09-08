@@ -59,7 +59,7 @@ Create a machine-readable manifest for each environment:
 - **Format:** Native 1-degree (180x360), 6-hourly, split into `StepXX/` subdirectories. (Verified 1462 samples for year 1980).
 - **Surface Variables Present:** `2t`, `10u`, `10v`, `msl` (proxy using `ps`), `ttr` (proxy using `mtnlwrf`), `tcwv`. Output shape after upsampling is `[1, 720, 1440]` for each target and `[1, 2, 720, 1440]` for inputs.
 - **Atmos Variables Present:** `z`, `q`, `t`, `u`, `v` (13 levels sliced). Output shape after upsampling is `[1, 13, 720, 1440]` for each target and `[1, 2, 13, 720, 1440]` for inputs.
-- **Static Variables Present:** `z`, `lsm`, plus dummy `slt`. Output shape is `[1, 720, 1440]`. `z` and `lsm` load real physical data correctly.
+- **Static Variables Present:** `z`, `lsm` from invariant files, plus `slt` correctly injected from `/pscratch/sd/k/kam352/Aurora/slt/slt_data.nc`. Output shape is `[1, 720, 1440]`. `z`, `lsm`, and `slt` load real physical data correctly.
 - **Preprocessing:** No pre-processed outputs exist yet. All upsampling to 0.25-degree happens dynamically in `src/dataset.py`.
 
 ### 2. Yale Grace/Bouchet (Legacy / Investigation Data)
