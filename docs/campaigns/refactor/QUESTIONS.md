@@ -209,3 +209,23 @@ rather than half-doing it.
 **ANSWER (human, YYYY-MM-DD):**
 
 ---
+
+## Q-09 — Task branch naming convention given Git ref conflict with `epic/refactor`
+
+**Raised by:** A1, 2026-09-10
+**Blocks:** nothing — proceeding on default.
+**Proposed default:** Use `epic/refactor-<TASK_ID>-<short-slug>` rather than `epic/refactor/<TASK_ID>-<short-slug>`. In standard Git storage, because `epic/refactor` exists as a branch ref file (`.git/refs/heads/epic/refactor`), Git rejects creating any sub-ref `epic/refactor/*` due to directory/file collision (`fatal: cannot lock ref 'refs/heads/epic/refactor/...': 'refs/heads/epic/refactor' exists`). Replacing the slash with a hyphen keeps the branch grouped under `epic/` without conflicting with the base branch name.
+
+**ANSWER (human, YYYY-MM-DD):**
+
+---
+
+## Q-10 — Perlmutter uv deployment: filesystem locking and environment paths
+
+**Raised by:** A1, 2026-09-10
+**Blocks:** nothing — proceeding on default.
+**Proposed default:** Standardize `UV_CACHE_DIR=/pscratch/sd/k/kam352/.cache/uv`, `UV_PYTHON_INSTALL_DIR=/pscratch/sd/k/kam352/.local/share/uv/python`, and `UV_DATA_DIR=/pscratch/sd/k/kam352/.local/share/uv` in shell startup scripts (`~/.bashrc` and `~/.local/bin/env`). Measurement during A1 proved that `uv` can install and run cleanly on Perlmutter (Python 3.10.21, torch 2.5.1+cu121 with 4 GPUs detected), but default paths in `/global/homes` trigger OS error 524 (flock unsupported on GPFS/Lustre). Moving cache and python directories to `/pscratch` completely resolves the locking issue.
+
+**ANSWER (human, YYYY-MM-DD):**
+
+---
