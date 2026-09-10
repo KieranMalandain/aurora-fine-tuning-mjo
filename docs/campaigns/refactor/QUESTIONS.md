@@ -229,3 +229,13 @@ rather than half-doing it.
 **ANSWER (human, YYYY-MM-DD):**
 
 ---
+
+## Q-11 — Perlmutter pre-commit, virtualenv, and go toolchain cache paths on `/pscratch`
+
+**Raised by:** A2, 2026-09-10
+**Blocks:** nothing — proceeding on default.
+**Proposed default:** Standardize `PRE_COMMIT_HOME=/pscratch/sd/k/kam352/.cache/pre-commit`, `VIRTUALENV_APP_DATA=/pscratch/sd/k/kam352/.cache/virtualenv`, `GOCACHE=/pscratch/sd/k/kam352/.cache/go-build`, and `GOPATH=/pscratch/sd/k/kam352/go` in `~/.bashrc`. On Perlmutter, `pre-commit`, `virtualenv`, and `go` (used for Gitleaks) attempt to acquire file locks in `$HOME/.cache/*` by default, triggering `OSError: [Errno 524] Unknown error 524` because `flock` is unsupported on Lustre/GPFS home mounts. Redirecting their caches to `/pscratch` allows pre-commit environments to build and run cleanly.
+
+**ANSWER (human, YYYY-MM-DD):**
+
+---
