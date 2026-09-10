@@ -1,0 +1,47 @@
+name: CI
+
+# CI runs the exact single gate command: uv run python scripts/check.py
+#
+# Environment note:
+# CI runners have NO GPU and NO CFS MOUNT. This is why pytest markers
+# (needs_data, needs_gpu, live) exist to exclude those tests on CI.
+# A green CI therefore does not mean the full training path works —
+# F2 acceptance on Perlmutter is what verifies that.
+#
+# Deliberate divergences from research-repo-template:
+# 1. Target runner is ubuntu-latest, not the template's windows-latest:
+#    This project is Linux-only on NERSC Perlmutter and always will be;
+#    a Windows runner would test an environment nobody uses.
+# 2. No standards-drift job: there is no org standards URL for this repo.
+# 3. No runtime-deps job: installing torch 2.5.1+cu121 on every run creates
+#    high runner overhead for little gain here.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Verification Gate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync --all-groups
+
+      - name: Run verification gate
+        run: uv run python scripts/check.py
