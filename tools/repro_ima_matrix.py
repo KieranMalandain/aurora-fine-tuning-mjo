@@ -63,10 +63,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 def make_synth_batch(device, H=720, W=1440, L=13):
     import torch
     from aurora import Batch, Metadata
-    surf = {k: torch.randn(1, 2, H, W, device=device)
-            for k in ("2t", "10u", "10v", "msl", "ttr", "tcwv")}
-    atmos = {k: torch.randn(1, 2, L, H, W, device=device)
-             for k in ("z", "q", "t", "u", "v")}
+
+    surf = {
+        k: torch.randn(1, 2, H, W, device=device)
+        for k in ("2t", "10u", "10v", "msl", "ttr", "tcwv")
+    }
+    atmos = {
+        k: torch.randn(1, 2, L, H, W, device=device) for k in ("z", "q", "t", "u", "v")
+    }
     static = {k: torch.randn(H, W, device=device) for k in ("z", "lsm", "slt")}
     meta = Metadata(
         lat=torch.linspace(90, -90, H),
@@ -80,17 +84,31 @@ def make_synth_batch(device, H=720, W=1440, L=13):
 
 def apply_reentrant_checkpointing(model):
     """Wrap the same module set Aurora targets, but with CheckpointImpl.REENTRANT."""
-    from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
-        apply_activation_checkpointing, checkpoint_wrapper, CheckpointImpl)
     import functools
-    names = {"Basic3DDecoderLayer", "Basic3DEncoderLayer", "LinearPatchReconstruction",
-             "Perceiver3DDecoder", "Perceiver3DEncoder", "Swin3DTransformerBackbone",
-             "Swin3DTransformerBlock"}
-    wrapper = functools.partial(checkpoint_wrapper,
-                                checkpoint_impl=CheckpointImpl.REENTRANT)
+
+    from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
+        CheckpointImpl,
+        apply_activation_checkpointing,
+        checkpoint_wrapper,
+    )
+
+    names = {
+        "Basic3DDecoderLayer",
+        "Basic3DEncoderLayer",
+        "LinearPatchReconstruction",
+        "Perceiver3DDecoder",
+        "Perceiver3DEncoder",
+        "Swin3DTransformerBackbone",
+        "Swin3DTransformerBlock",
+    }
+    wrapper = functools.partial(
+        checkpoint_wrapper, checkpoint_impl=CheckpointImpl.REENTRANT
+    )
     apply_activation_checkpointing(
-        model, checkpoint_wrapper_fn=wrapper,
-        check_fn=lambda m: m.__class__.__name__ in names)
+        model,
+        checkpoint_wrapper_fn=wrapper,
+        check_fn=lambda m: m.__class__.__name__ in names,
+    )
 
 
 def main():
@@ -116,9 +134,11 @@ def main():
         print("No CUDA - this reproducer must run on a GPU node.")
         sys.exit(2)
     device = torch.device("cuda")
-    print(f"[env] torch={torch.__version__} cuda={torch.version.cuda} "
-          f"dev={torch.cuda.get_device_name(0)} "
-          f"alloc_conf={os.environ.get('PYTORCH_CUDA_ALLOC_CONF', '<unset>')}")
+    print(
+        f"[env] torch={torch.__version__} cuda={torch.version.cuda} "
+        f"dev={torch.cuda.get_device_name(0)} "
+        f"alloc_conf={os.environ.get('PYTORCH_CUDA_ALLOC_CONF', '<unset>')}"
+    )
 
     if args.exp == 1:
         torch.backends.cuda.enable_flash_sdp(False)
@@ -142,8 +162,9 @@ def main():
             p.requires_grad = False
         n_unfrozen = 0
         for name, p in model.named_parameters():
-            if ("surf_heads" in name and (".ttr" in name or ".tcwv" in name)) \
-                    or ("surf_token_embeds" in name and (".ttr" in name or ".tcwv" in name)):
+            if ("surf_heads" in name and (".ttr" in name or ".tcwv" in name)) or (
+                "surf_token_embeds" in name and (".ttr" in name or ".tcwv" in name)
+            ):
                 p.requires_grad = True
                 n_unfrozen += p.numel()
         print(f"[freeze] production-style: {n_unfrozen} trainable params")
@@ -164,19 +185,24 @@ def main():
 
     try:
         for i in range(args.steps):
-            with torch.amp.autocast('cuda', enabled=use_amp, dtype=torch.bfloat16):
+            with torch.amp.autocast("cuda", enabled=use_amp, dtype=torch.bfloat16):
                 pred = model(batch)
-                loss = sum(v.float().abs().mean() for v in pred.surf_vars.values()) + \
-                       sum(v.float().abs().mean() for v in pred.atmos_vars.values())
+                loss = sum(
+                    v.float().abs().mean() for v in pred.surf_vars.values()
+                ) + sum(v.float().abs().mean() for v in pred.atmos_vars.values())
             loss.backward()
             if opt:
                 opt.step()
                 opt.zero_grad(set_to_none=True)
             torch.cuda.synchronize()
             mem = torch.cuda.max_memory_allocated() / 2**30
-            print(f"[step {i+1}/{args.steps}] loss={loss.item():.4f} "
-                  f"peak_mem={mem:.1f} GiB  OK")
-        print(f"\nEXPERIMENT E{args.exp}: CLEAN - no crash in {args.steps} fwd+bwd steps.")
+            print(
+                f"[step {i + 1}/{args.steps}] loss={loss.item():.4f} "
+                f"peak_mem={mem:.1f} GiB  OK"
+            )
+        print(
+            f"\nEXPERIMENT E{args.exp}: CLEAN - no crash in {args.steps} fwd+bwd steps."
+        )
         sys.exit(0)
     except RuntimeError as e:
         print(f"\nEXPERIMENT E{args.exp}: CRASHED - {str(e)[:400]}")

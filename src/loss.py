@@ -1,8 +1,7 @@
 # src/loss.py
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
+from torch import nn
 
 
 class TropicalWeightedL1Loss(nn.Module):
@@ -17,18 +16,27 @@ class TropicalWeightedL1Loss(nn.Module):
       - Surface:  (B, H, W)      or (B, 1, H, W)
       - Atmos:    (B, levels, H, W)
     """
-    def __init__(self, lat_coords, tropics_bbox=[-20, 20], tropics_weight=1.0, extratropics_weight=0.1):
+
+    def __init__(
+        self,
+        lat_coords,
+        tropics_bbox=[-20, 20],
+        tropics_weight=1.0,
+        extratropics_weight=0.1,
+    ):
         super().__init__()
-        self.l1 = nn.L1Loss(reduction='none')
+        self.l1 = nn.L1Loss(reduction="none")
         self.n_lat = lat_coords.shape[0]
 
         weights = torch.ones_like(lat_coords)
-        tropical_mask = (lat_coords >= tropics_bbox[0]) & (lat_coords <= tropics_bbox[1])
+        tropical_mask = (lat_coords >= tropics_bbox[0]) & (
+            lat_coords <= tropics_bbox[1]
+        )
 
         weights[tropical_mask] = tropics_weight
         weights[~tropical_mask] = extratropics_weight
 
-        self.register_buffer('lat_weights', weights)  # (H,)
+        self.register_buffer("lat_weights", weights)  # (H,)
 
     def forward(self, pred, target):
         loss = self.l1(pred, target)
@@ -54,12 +62,13 @@ class SpectralLoss(nn.Module):
     Prevents the model from producing 'blurry' predictions by penalizing
     discrepancies in the power spectrum (texture and sharp gradients).
     """
+
     def __init__(self):
         super().__init__()
 
     def forward(self, pred, target):
-        pred_fft = torch.fft.rfft2(pred.float(), norm='ortho')
-        target_fft = torch.fft.rfft2(target.float(), norm='ortho')
+        pred_fft = torch.fft.rfft2(pred.float(), norm="ortho")
+        target_fft = torch.fft.rfft2(target.float(), norm="ortho")
         return torch.abs(pred_fft - target_fft).mean()
 
 
@@ -156,7 +165,9 @@ class MoistureBudgetLoss(nn.Module):
         dlat_rad = torch.deg2rad(torch.abs(lats[0] - lats[1]))
         dlon_rad = torch.deg2rad(torch.abs(lons[1] - lons[0]))
 
-        self.dy = self.R * dlat_rad  # constant (meters per lat grid step x2 applied below)
+        self.dy = (
+            self.R * dlat_rad
+        )  # constant (meters per lat grid step x2 applied below)
 
         cos_lat_raw = torch.cos(torch.deg2rad(lats))
         cos_lat_safe = torch.clamp(cos_lat_raw, min=1e-5).view(1, 1, -1, 1)
@@ -180,7 +191,7 @@ class MoistureBudgetLoss(nn.Module):
         """div = (1 / R cos phi ) [partial u/partial  lambda  + partial (v cos phi )/partial  phi ] on (B,T,H,W) fields."""
         # partial u/partial  lambda  term  - circular in longitude; dx already contains Rdotcos phi dotd lambda .
         u_padded = F.pad(u_flux, pad=(1, 1, 0, 0), mode="circular")
-        du_dlon = (u_padded[..., 2:] - u_padded[..., :-2]) / (2.0 * self.dx) 
+        du_dlon = (u_padded[..., 2:] - u_padded[..., :-2]) / (2.0 * self.dx)
 
         # partial (v cos phi )/partial  phi - replicate at poles.  lats run 90->−90 so
         # (north − south) is the correct + phi  direction.
@@ -208,7 +219,9 @@ class MoistureBudgetLoss(nn.Module):
         # Guard: need q, u, v in both batches
         required = {"q", "u", "v"}
         for batch in (in_batch, pred_batch):
-            if not hasattr(batch, "atmos_vars") or not required.issubset(batch.atmos_vars.keys()):
+            if not hasattr(batch, "atmos_vars") or not required.issubset(
+                batch.atmos_vars.keys()
+            ):
                 return torch.zeros((), device=device, requires_grad=True)
 
         # FIX 1: take ONLY the latest history step so the tendency is a
@@ -219,7 +232,10 @@ class MoistureBudgetLoss(nn.Module):
         v_next = pred_batch.atmos_vars["v"][:, -1:, ...]
 
         # Grid-mismatch guard (smoke tests / low-res debugging).
-        if q_next.shape[-2] != self.lats.shape[0] or q_next.shape[-1] != self.lons.shape[0]:
+        if (
+            q_next.shape[-2] != self.lats.shape[0]
+            or q_next.shape[-1] != self.lons.shape[0]
+        ):
             return torch.zeros((), device=device, requires_grad=True)
 
         # FIX 2: force float32 outside autocast  - the residual is a small

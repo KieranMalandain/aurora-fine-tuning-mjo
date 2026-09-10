@@ -44,21 +44,21 @@ Everything else (step-level checkpointing, resumable sampler, wall-clock
 guard, SIGUSR1, JSONL metrics, OOM emergency save) is unchanged from v2.
 """
 
-import math
 import contextlib
 import logging
+import math
 import signal
 import time
 from pathlib import Path
 
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 import torch.distributed as dist
+import torch.nn.functional as F
+from torch import nn
 from torch.utils.data import DataLoader, DistributedSampler, Subset
 
-from src.loss import TropicalWeightedL1Loss, SpectralLoss, MoistureBudgetLoss
 from src.checkpoint import CheckpointManager, MetricsLogger
+from src.loss import MoistureBudgetLoss, SpectralLoss, TropicalWeightedL1Loss
 
 log = logging.getLogger(__name__)
 
@@ -66,6 +66,7 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Optimizer / scheduler
 # ---------------------------------------------------------------------------
+
 
 def _build_optimizer(model: nn.Module, cfg: dict) -> torch.optim.Optimizer:
     opt_cfg = cfg["training"]["optimizer"]
@@ -76,7 +77,9 @@ def _build_optimizer(model: nn.Module, cfg: dict) -> torch.optim.Optimizer:
 
     params = [p for p in model.parameters() if p.requires_grad]
     if not params:
-        raise ValueError("No trainable parameters  - check freeze_backbone/use_lora config.")
+        raise ValueError(
+            "No trainable parameters  - check freeze_backbone/use_lora config."
+        )
     if name == "adamw":
         return torch.optim.AdamW(params, lr=lr, weight_decay=wd, betas=betas)
     if name == "adam":
@@ -119,6 +122,7 @@ def _build_scheduler(optimizer, cfg: dict, optim_steps_per_epoch: int):
 # Batch plumbing helpers
 # ---------------------------------------------------------------------------
 
+
 def _extract_batch_outputs(pred_batch, target_dict, device):
     pred_parts, tgt_parts = [], []
     for attr in ("surf_vars", "atmos_vars"):
@@ -151,6 +155,7 @@ def _align_shapes(pred_t, tgt_t):
 def _upsample_batch_gpu(in_batch, surf_targets_list, atmos_targets_list, device):
     """Upsample a 1deg batch + targets to 0.25deg (720x1440) on GPU."""
     from aurora import Batch
+
     TARGET_SIZE = (720, 1440)
 
     def _up(t):
@@ -168,7 +173,7 @@ def _upsample_batch_gpu(in_batch, surf_targets_list, atmos_targets_list, device)
             pass
         else:
             return t
-        t = F.interpolate(t, size=TARGET_SIZE, mode='bilinear', align_corners=False)
+        t = F.interpolate(t, size=TARGET_SIZE, mode="bilinear", align_corners=False)
         if len(orig) == 2:
             return t.squeeze(0).squeeze(0)
         elif len(orig) == 3:
@@ -182,8 +187,10 @@ def _upsample_batch_gpu(in_batch, surf_targets_list, atmos_targets_list, device)
     new_static = {k: v.to(device) for k, v in in_batch.static_vars.items()}
 
     up_batch = Batch(
-        surf_vars=new_surf, atmos_vars=new_atmos,
-        static_vars=new_static, metadata=in_batch.metadata,
+        surf_vars=new_surf,
+        atmos_vars=new_atmos,
+        static_vars=new_static,
+        metadata=in_batch.metadata,
     )
 
     target_dict_list = []
@@ -209,8 +216,13 @@ def _upsample_batch_gpu(in_batch, surf_targets_list, atmos_targets_list, device)
 # differs. Only variables present in this table are clamped - everything
 # else passes through unchanged.
 _ROLLOUT_CLAMP = {
-    "msl": (3.0e4, 1.1e5), "2t": (150., 350.), "10u": (-120., 120.), "10v": (-120., 120.),
-    "ttr": (-600., 50.), "tcwv": (0., 120.), "q": (0., 0.1),
+    "msl": (3.0e4, 1.1e5),
+    "2t": (150.0, 350.0),
+    "10u": (-120.0, 120.0),
+    "10v": (-120.0, 120.0),
+    "ttr": (-600.0, 50.0),
+    "tcwv": (0.0, 120.0),
+    "q": (0.0, 0.1),
 }
 
 
@@ -228,6 +240,7 @@ def _advance_batch(in_batch, pred_batch, step_index: int, detach: bool = False):
     after its own backward().
     """
     from datetime import timedelta
+
     from aurora.batch import Batch, Metadata
 
     dt = timedelta(hours=6)
@@ -275,6 +288,7 @@ def _advance_batch(in_batch, pred_batch, step_index: int, detach: bool = False):
 # Resumable sampler + dataloader construction
 # ---------------------------------------------------------------------------
 
+
 class ResumableDistributedSampler(DistributedSampler):
     """DistributedSampler whose per-epoch permutation can be fast-forwarded.
 
@@ -289,7 +303,7 @@ class ResumableDistributedSampler(DistributedSampler):
 
     def __iter__(self):
         indices = list(super().__iter__())
-        return iter(indices[self.skip_samples:])
+        return iter(indices[self.skip_samples :])
 
     def __len__(self):
         return max(0, super().__len__() - self.skip_samples)
@@ -301,10 +315,13 @@ def build_dataloader(cfg: dict, split: str) -> DataLoader:
     use_dummy = data_cfg.get("use_dummy", True)
 
     rollout_cfg = cfg.get("training", {}).get("rollout", {})
-    max_rollout_steps = rollout_cfg.get("max_steps", 1) if rollout_cfg.get("enabled", False) else 1
+    max_rollout_steps = (
+        rollout_cfg.get("max_steps", 1) if rollout_cfg.get("enabled", False) else 1
+    )
 
     if use_dummy:
         from src.dummy_dataset import MJODataset, load_and_combine_files
+
         dummy_cfg = data_cfg.get("dummy", {})
         surface_files = dummy_cfg.get("surface_files", [])
         pressure_files = dummy_cfg.get("pressure_files", [])
@@ -313,16 +330,23 @@ def build_dataloader(cfg: dict, split: str) -> DataLoader:
             raise ValueError("Dummy dataset paths not set in config['data']['dummy'].")
         surface_ds = load_and_combine_files(surface_files)
         pressure_ds = load_and_combine_files(pressure_files)
-        dataset = MJODataset(surface_ds, pressure_ds, static_file,
-                             max_rollout_steps=max_rollout_steps)
+        dataset = MJODataset(
+            surface_ds, pressure_ds, static_file, max_rollout_steps=max_rollout_steps
+        )
         collate = MJODataset.collate_fn
     else:
-        from src.dataset import LANLMJODataset, collate_fn as collate
+        from src.dataset import LANLMJODataset
+        from src.dataset import collate_fn as collate
+
         real_cfg = data_cfg.get("real", {})
-        years = real_cfg.get("train_years", [1980, 2015]) if split == "train" \
+        years = (
+            real_cfg.get("train_years", [1980, 2015])
+            if split == "train"
             else real_cfg.get("val_years", [2016, 2019])
+        )
         dataset = LANLMJODataset(
-            start_year=years[0], end_year=years[1],
+            start_year=years[0],
+            end_year=years[1],
             root_dir=data_cfg.get("root"),
             slt_path=data_cfg.get("slt_path"),
             max_rollout_steps=max_rollout_steps,
@@ -336,7 +360,11 @@ def build_dataloader(cfg: dict, split: str) -> DataLoader:
         world = dist.get_world_size() if dist.is_initialized() else 1
         max_val = cfg.get("training", {}).get("max_val_batches", None)
         if max_val is not None and len(dataset) > max_val * world:
-            idx = torch.linspace(0, len(dataset) - 1, steps=max_val * world).round().long()
+            idx = (
+                torch.linspace(0, len(dataset) - 1, steps=max_val * world)
+                .round()
+                .long()
+            )
             idx = torch.unique(idx)
             dataset = Subset(dataset, idx.tolist())
 
@@ -361,7 +389,9 @@ def build_dataloader(cfg: dict, split: str) -> DataLoader:
         pin_memory=data_cfg.get("pin_memory", True),
         collate_fn=collate,
         persistent_workers=(num_workers > 0),
-        prefetch_factor=(data_cfg.get("prefetch_factor", 4) if num_workers > 0 else None),
+        prefetch_factor=(
+            data_cfg.get("prefetch_factor", 4) if num_workers > 0 else None
+        ),
     )
 
 
@@ -369,13 +399,21 @@ def build_dataloader(cfg: dict, split: str) -> DataLoader:
 # Trainer
 # ---------------------------------------------------------------------------
 
+
 class Trainer:
     """Trains an Aurora-based MJO model with production checkpoint/resume."""
 
     EXIT_TIMEOUT = 99
 
-    def __init__(self, model, cfg, device, train_loader=None, val_loader=None,
-                 is_main: bool = True):
+    def __init__(
+        self,
+        model,
+        cfg,
+        device,
+        train_loader=None,
+        val_loader=None,
+        is_main: bool = True,
+    ):
         self.model = model.to(device)
         self.cfg = cfg
         self.device = device
@@ -397,7 +435,9 @@ class Trainer:
         self.use_grid_loss = grid_cfg.get("enabled", True)
 
         spec_cfg = loss_cfg.get("spectral", {})
-        self.spectral_loss = SpectralLoss().to(device) if spec_cfg.get("enabled", False) else None
+        self.spectral_loss = (
+            SpectralLoss().to(device) if spec_cfg.get("enabled", False) else None
+        )
         self.spectral_weight = float(spec_cfg.get("weight", 0.0))
 
         mjo_cfg = loss_cfg.get("mjo_head", {})
@@ -408,8 +448,21 @@ class Trainer:
         self.use_moisture_budget = phys_cfg.get("enabled", False)
         self.moisture_budget_weight = float(phys_cfg.get("weight", 0.0))
         if self.use_moisture_budget and self.moisture_budget_weight > 0:
-            pressure_levels = [50, 100, 150, 200, 250, 300, 400, 500,
-                               600, 700, 850, 925, 1000]
+            pressure_levels = [
+                50,
+                100,
+                150,
+                200,
+                250,
+                300,
+                400,
+                500,
+                600,
+                700,
+                850,
+                925,
+                1000,
+            ]
             self.moisture_budget_loss = MoistureBudgetLoss(
                 pressure_levels=pressure_levels,
                 latitudes=torch.linspace(90, -90, 720).tolist(),
@@ -417,8 +470,10 @@ class Trainer:
                 dt_seconds=phys_cfg.get("dt_seconds", 21600),
                 tropics_bbox=tuple(phys_cfg.get("tropics_bbox", [-20, 20])),
             ).to(device)
-            log.info("Moisture-budget physics loss enabled (weight=%.4f)",
-                     self.moisture_budget_weight)
+            log.info(
+                "Moisture-budget physics loss enabled (weight=%.4f)",
+                self.moisture_budget_weight,
+            )
         else:
             self.moisture_budget_loss = None
 
@@ -476,14 +531,18 @@ class Trainer:
         self.rollout_enabled = rollout_cfg.get("enabled", False)
         self.rollout_start = max(1, rollout_cfg.get("start_steps", 1))
         self.rollout_max = max(self.rollout_start, rollout_cfg.get("max_steps", 1))
-        self.rollout_incr_every = max(1, rollout_cfg.get("step_increase_every_n_epochs", 2))
+        self.rollout_incr_every = max(
+            1, rollout_cfg.get("step_increase_every_n_epochs", 2)
+        )
         self.rollout_weighting = rollout_cfg.get("step_loss_weighting", "uniform")
         # v3: "detached" (per-step backward, O(1) memory, no checkpointing
         # needed) or "full" (whole-chain BPTT, requires checkpointing at k>=2).
         self.rollout_backprop = rollout_cfg.get("backprop", "full").lower()
         if self.rollout_enabled:
-            log.info(f"Rollout enabled: backprop={self.rollout_backprop} "
-                     f"k={self.rollout_start}->{self.rollout_max}")
+            log.info(
+                f"Rollout enabled: backprop={self.rollout_backprop} "
+                f"k={self.rollout_start}->{self.rollout_max}"
+            )
 
         # ------------------------------------------------------------------
         # Resume counters
@@ -505,9 +564,11 @@ class Trainer:
         # AMP
         # ------------------------------------------------------------------
         self.use_amp = train_cfg.get("use_amp", False)
-        self.amp_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        self.amp_dtype = (
+            torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        )
         self.grad_scaler = torch.amp.GradScaler(
-            'cuda', enabled=(self.use_amp and self.amp_dtype == torch.float16)
+            "cuda", enabled=(self.use_amp and self.amp_dtype == torch.float16)
         )
         if self.use_amp:
             log.info(f"AMP enabled with dtype={self.amp_dtype}")
@@ -520,7 +581,9 @@ class Trainer:
 
     # ------------------------------------------------------------------
     def _on_usr1(self, signum, frame):
-        log.warning("SIGUSR1 received (SLURM timeout warning)  - will checkpoint & exit.")
+        log.warning(
+            "SIGUSR1 received (SLURM timeout warning)  - will checkpoint & exit."
+        )
         self._usr1 = True
 
     def _should_stop_for_time(self) -> bool:
@@ -568,8 +631,14 @@ class Trainer:
         if z is not None:
             (z * 0.0).backward()
 
-    def _guarded_backward(self, loss: torch.Tensor, is_sync: bool,
-                          context: str, epoch: int, batch_in_epoch: int) -> bool:
+    def _guarded_backward(
+        self,
+        loss: torch.Tensor,
+        is_sync: bool,
+        context: str,
+        epoch: int,
+        batch_in_epoch: int,
+    ) -> bool:
         """Backward `loss` with the v3 non-finite policy.
 
         Returns True if a real (non-surrogate) backward ran.
@@ -582,9 +651,11 @@ class Trainer:
             # Someone (possibly us) is non-finite on the sync pass.
             if not finite:
                 self._nonfinite_train_batches += 1
-                log.warning(f"[nan-guard] non-finite loss at epoch {epoch} "
-                            f"batch {batch_in_epoch} ({context}, sync pass)  - "
-                            f"surrogate backward on this rank.")
+                log.warning(
+                    f"[nan-guard] non-finite loss at epoch {epoch} "
+                    f"batch {batch_in_epoch} ({context}, sync pass)  - "
+                    f"surrogate backward on this rank."
+                )
                 self._surrogate_sync_backward()
             else:
                 # Our loss is fine, another rank's is not: run the real
@@ -597,8 +668,10 @@ class Trainer:
             self.grad_scaler.scale(loss).backward()
             return True
         self._nonfinite_train_batches += 1
-        log.warning(f"[nan-guard] non-finite loss at epoch {epoch} "
-                    f"batch {batch_in_epoch} ({context}, no-sync pass)  - skipped.")
+        log.warning(
+            f"[nan-guard] non-finite loss at epoch {epoch} "
+            f"batch {batch_in_epoch} ({context}, no-sync pass)  - skipped."
+        )
         return False
 
     # ------------------------------------------------------------------
@@ -607,7 +680,11 @@ class Trainer:
 
     def load_checkpoint(self, path, weights_only: bool = False):
         counters = CheckpointManager.load(
-            path, self.model, self.optimizer, self.scheduler, self.grad_scaler,
+            path,
+            self.model,
+            self.optimizer,
+            self.scheduler,
+            self.grad_scaler,
             weights_only_model=weights_only,
         )
         if not weights_only:
@@ -656,7 +733,12 @@ class Trainer:
             pred_batch, mjo_pred = model_out, None
 
         zero = torch.zeros((), device=self.device)
-        out = {"grid": zero, "spectral": zero, "mjo_head": zero, "moisture_budget": zero}
+        out = {
+            "grid": zero,
+            "spectral": zero,
+            "mjo_head": zero,
+            "moisture_budget": zero,
+        }
 
         if self.use_grid_loss:
             var_losses = []
@@ -674,15 +756,24 @@ class Trainer:
         if self.spectral_loss is not None and self.spectral_weight > 0:
             pred_t, tgt_t = _extract_batch_outputs(pred_batch, target_dict, self.device)
             if pred_t is not None:
-                out["spectral"] = self.spectral_weight * self.spectral_loss(pred_t, tgt_t)
+                out["spectral"] = self.spectral_weight * self.spectral_loss(
+                    pred_t, tgt_t
+                )
 
-        if self.use_mjo_head_loss and mjo_pred is not None and "mjo_targets" in target_dict:
+        if (
+            self.use_mjo_head_loss
+            and mjo_pred is not None
+            and "mjo_targets" in target_dict
+        ):
             out["mjo_head"] = self.mjo_head_weight * nn.functional.l1_loss(
-                mjo_pred.to(self.device), target_dict["mjo_targets"].to(self.device))
+                mjo_pred.to(self.device), target_dict["mjo_targets"].to(self.device)
+            )
 
         if self.moisture_budget_loss is not None:
-            out["moisture_budget"] = self.moisture_budget_weight * \
-                self.moisture_budget_loss(current_batch, pred_batch)
+            out["moisture_budget"] = (
+                self.moisture_budget_weight
+                * self.moisture_budget_loss(current_batch, pred_batch)
+            )
 
         return out, pred_batch
 
@@ -704,14 +795,20 @@ class Trainer:
         for step_idx in range(k):
             w = weights[step_idx]
             target_dict = self._select_target(target_dict_list, step_idx)
-            step_losses, pred_batch = self._single_step_losses(current_batch, target_dict)
+            step_losses, pred_batch = self._single_step_losses(
+                current_batch, target_dict
+            )
             for name in acc:
                 acc[name] = acc[name] + w * step_losses[name]
             if step_idx < k - 1:
                 current_batch = _advance_batch(current_batch, pred_batch, step_idx)
 
         def _to_tensor(v):
-            return v if isinstance(v, torch.Tensor) else torch.tensor(v, device=self.device)
+            return (
+                v
+                if isinstance(v, torch.Tensor)
+                else torch.tensor(v, device=self.device)
+            )
 
         losses = {k_: _to_tensor(v) for k_, v in acc.items()}
         losses["total"] = sum(losses.values())
@@ -721,8 +818,14 @@ class Trainer:
     # Detached rollout: per-step backward, O(1) activation memory in k.
     # ------------------------------------------------------------------
 
-    def _detached_rollout_step(self, in_batch, target_dict_list, epoch: int,
-                               is_boundary: bool, batch_in_epoch: int) -> dict:
+    def _detached_rollout_step(
+        self,
+        in_batch,
+        target_dict_list,
+        epoch: int,
+        is_boundary: bool,
+        batch_in_epoch: int,
+    ) -> dict:
         """Train one micro-batch with detached ("pushforward") rollout.
 
         For each rollout step j:
@@ -741,23 +844,38 @@ class Trainer:
         k = self._current_rollout_steps(epoch)
         weights = self._step_weights(k)
         is_ddp = hasattr(self.model, "no_sync")
-        items = {"grid": 0.0, "spectral": 0.0, "mjo_head": 0.0,
-                 "moisture_budget": 0.0, "total": 0.0}
+        items = {
+            "grid": 0.0,
+            "spectral": 0.0,
+            "mjo_head": 0.0,
+            "moisture_budget": 0.0,
+            "total": 0.0,
+        }
 
         current_batch = in_batch
         for step_idx in range(k):
             is_sync = is_boundary and (step_idx == k - 1)
-            sync_ctx = self.model.no_sync() if (is_ddp and not is_sync) \
+            sync_ctx = (
+                self.model.no_sync()
+                if (is_ddp and not is_sync)
                 else contextlib.nullcontext()
+            )
             with sync_ctx:
-                with torch.amp.autocast('cuda', enabled=self.use_amp, dtype=self.amp_dtype):
+                with torch.amp.autocast(
+                    "cuda", enabled=self.use_amp, dtype=self.amp_dtype
+                ):
                     step_losses, pred_batch = self._single_step_losses(
-                        current_batch, self._select_target(target_dict_list, step_idx))
+                        current_batch, self._select_target(target_dict_list, step_idx)
+                    )
                     step_total = sum(step_losses.values())
                     scaled = step_total * (weights[step_idx] / self.grad_accum_steps)
-                self._guarded_backward(scaled, is_sync,
-                                       context=f"detached k={step_idx+1}/{k}",
-                                       epoch=epoch, batch_in_epoch=batch_in_epoch)
+                self._guarded_backward(
+                    scaled,
+                    is_sync,
+                    context=f"detached k={step_idx + 1}/{k}",
+                    epoch=epoch,
+                    batch_in_epoch=batch_in_epoch,
+                )
 
             # Logging accumulation (weighted, NaN-sanitized for display only).
             for name, v in step_losses.items():
@@ -771,8 +889,9 @@ class Trainer:
             # Advance with the graph CUT  - this is what frees step j's
             # activations and keeps memory flat in k.
             if step_idx < k - 1:
-                current_batch = _advance_batch(current_batch, pred_batch,
-                                               step_idx, detach=True)
+                current_batch = _advance_batch(
+                    current_batch, pred_batch, step_idx, detach=True
+                )
         return items
 
     # ------------------------------------------------------------------
@@ -790,9 +909,12 @@ class Trainer:
             needs_upsample = next(iter(surf_out_list[0].values())).shape[-1] < 1440
             if needs_upsample:
                 in_batch, target_dict_list = _upsample_batch_gpu(
-                    in_batch, surf_out_list, atmos_out_list, self.device)
+                    in_batch, surf_out_list, atmos_out_list, self.device
+                )
             else:
-                target_dict_list = [{**s, **a} for s, a in zip(surf_out_list, atmos_out_list)]
+                target_dict_list = [
+                    {**s, **a} for s, a in zip(surf_out_list, atmos_out_list)
+                ]
         else:
             raise ValueError(f"Unexpected batch tuple length: {len(batch)}")
 
@@ -811,21 +933,45 @@ class Trainer:
         due_steps = self._steps_since_save >= self.save_every_steps
         due_plateau = False
         n = self.plateau_window
-        if not due_steps and len(self._loss_hist) >= 2 * n and self._steps_since_save >= n:
-            prev = sum(self._loss_hist[-2 * n:-n]) / n
+        if (
+            not due_steps
+            and len(self._loss_hist) >= 2 * n
+            and self._steps_since_save >= n
+        ):
+            prev = sum(self._loss_hist[-2 * n : -n]) / n
             recent = sum(self._loss_hist[-n:]) / n
             if prev > 0 and abs(prev - recent) / prev < self.plateau_rel_delta:
                 due_plateau = True
         if due_steps or due_plateau:
-            self._save(f"step_{self.global_step:07d}", epoch, batch_in_epoch,
-                       reason="plateau" if due_plateau else "interval")
+            self._save(
+                f"step_{self.global_step:07d}",
+                epoch,
+                batch_in_epoch,
+                reason="plateau" if due_plateau else "interval",
+            )
 
-    def _save(self, tag: str, epoch: int, batch_in_epoch: int,
-              val_loss: float = float("nan"), is_best: bool = False, reason: str = ""):
+    def _save(
+        self,
+        tag: str,
+        epoch: int,
+        batch_in_epoch: int,
+        val_loss: float = float("nan"),
+        is_best: bool = False,
+        reason: str = "",
+    ):
         self.ckpt.save(
-            tag, self.model, self.optimizer, self.scheduler, self.grad_scaler,
-            epoch=epoch, global_step=self.global_step, batch_in_epoch=batch_in_epoch,
-            best_val=self.best_val, val_loss=val_loss, config=self.cfg, is_best=is_best,
+            tag,
+            self.model,
+            self.optimizer,
+            self.scheduler,
+            self.grad_scaler,
+            epoch=epoch,
+            global_step=self.global_step,
+            batch_in_epoch=batch_in_epoch,
+            best_val=self.best_val,
+            val_loss=val_loss,
+            config=self.cfg,
+            is_best=is_best,
             nonfinite_train_batches=self._nonfinite_train_batches,
             nonfinite_grad_steps=self._nonfinite_grad_steps,
         )
@@ -854,7 +1000,7 @@ class Trainer:
             epoch_len = min(epoch_len, self.max_steps_per_epoch)
 
         k = self._current_rollout_steps(epoch)
-        use_detached = (self.rollout_enabled and self.rollout_backprop == "detached")
+        use_detached = self.rollout_enabled and self.rollout_backprop == "detached"
 
         epoch_loss, seen = 0.0, 0
         batch_in_epoch = skip_batches
@@ -866,7 +1012,9 @@ class Trainer:
                 break
             batch_in_epoch += 1
             micro = (batch_in_epoch - 1) % self.grad_accum_steps
-            is_boundary = (micro == self.grad_accum_steps - 1) or (batch_in_epoch == epoch_len)
+            is_boundary = (micro == self.grad_accum_steps - 1) or (
+                batch_in_epoch == epoch_len
+            )
 
             try:
                 in_batch, target_dict_list = self._prep_batch(batch)
@@ -874,32 +1022,54 @@ class Trainer:
                 if use_detached:
                     # Detached path manages its own no_sync per rollout step.
                     items = self._detached_rollout_step(
-                        in_batch, target_dict_list, epoch, is_boundary, batch_in_epoch)
+                        in_batch, target_dict_list, epoch, is_boundary, batch_in_epoch
+                    )
                     losses_view = items
                     step_loss = items["total"]
                 else:
-                    sync_ctx = self.model.no_sync() if (is_ddp and not is_boundary) \
+                    sync_ctx = (
+                        self.model.no_sync()
+                        if (is_ddp and not is_boundary)
                         else contextlib.nullcontext()
+                    )
                     with sync_ctx:
-                        with torch.amp.autocast('cuda', enabled=self.use_amp,
-                                                dtype=self.amp_dtype):
-                            losses = self._compute_loss(in_batch, target_dict_list,
-                                                        epoch=epoch)
+                        with torch.amp.autocast(
+                            "cuda", enabled=self.use_amp, dtype=self.amp_dtype
+                        ):
+                            losses = self._compute_loss(
+                                in_batch, target_dict_list, epoch=epoch
+                            )
                             loss = losses["total"] / self.grad_accum_steps
-                        self._guarded_backward(loss, is_boundary, context="full",
-                                               epoch=epoch, batch_in_epoch=batch_in_epoch)
-                    losses_view = {n: float(v.detach().item()) for n, v in losses.items()}
+                        self._guarded_backward(
+                            loss,
+                            is_boundary,
+                            context="full",
+                            epoch=epoch,
+                            batch_in_epoch=batch_in_epoch,
+                        )
+                    losses_view = {
+                        n: float(v.detach().item()) for n, v in losses.items()
+                    }
                     step_loss = losses_view["total"]
 
             except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
                 msg = str(e)
-                if "out of memory" in msg.lower() or "cublas" in msg.lower() \
-                        or "illegal memory access" in msg.lower():
-                    log.error(f"GPU memory/CUDA failure at epoch {epoch} "
-                              f"batch {batch_in_epoch}: {msg[:300]}")
+                if (
+                    "out of memory" in msg.lower()
+                    or "cublas" in msg.lower()
+                    or "illegal memory access" in msg.lower()
+                ):
+                    log.error(
+                        f"GPU memory/CUDA failure at epoch {epoch} "
+                        f"batch {batch_in_epoch}: {msg[:300]}"
+                    )
                     try:
-                        self._save(f"emergency_step_{self.global_step:07d}",
-                                   epoch, batch_in_epoch - 1, reason="OOM/CUDA")
+                        self._save(
+                            f"emergency_step_{self.global_step:07d}",
+                            epoch,
+                            batch_in_epoch - 1,
+                            reason="OOM/CUDA",
+                        )
                     except Exception as save_err:
                         log.error(f"Emergency checkpoint save ALSO failed: {save_err}")
                     try:
@@ -913,7 +1083,7 @@ class Trainer:
                 seen += 1
                 self._loss_hist.append(step_loss)
                 if len(self._loss_hist) > 4 * self.plateau_window:
-                    self._loss_hist = self._loss_hist[-2 * self.plateau_window:]
+                    self._loss_hist = self._loss_hist[-2 * self.plateau_window :]
 
             if is_boundary:
                 self.grad_scaler.unscale_(self.optimizer)  # no-op under bf16, harmless
@@ -938,7 +1108,9 @@ class Trainer:
 
                 if grads_finite:
                     if self.max_grad_norm > 0:
-                        nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
+                        nn.utils.clip_grad_norm_(
+                            self.model.parameters(), self.max_grad_norm
+                        )
                     self.grad_scaler.step(self.optimizer)
                     self.grad_scaler.update()
                     if self.scheduler is not None:
@@ -962,14 +1134,20 @@ class Trainer:
 
                 if self._sync_stop_flag(self._should_stop_for_time()):
                     log.warning("Wall-clock guard tripped  - saving final state.")
-                    self._save(f"step_{self.global_step:07d}", epoch, batch_in_epoch,
-                               reason="time-limit")
+                    self._save(
+                        f"step_{self.global_step:07d}",
+                        epoch,
+                        batch_in_epoch,
+                        reason="time-limit",
+                    )
                     if dist.is_initialized():
                         dist.barrier()
                     stopped = True
                     break
 
-            if (batch_in_epoch % self.log_every == 0 or batch_in_epoch == 1) and self.is_main:
+            if (
+                batch_in_epoch % self.log_every == 0 or batch_in_epoch == 1
+            ) and self.is_main:
                 lr = self.optimizer.param_groups[0]["lr"]
                 elapsed = time.time() - self._t_start
                 log.info(
@@ -981,22 +1159,28 @@ class Trainer:
                     f"spec={losses_view['spectral']:.4f}, "
                     f"mjo={losses_view['mjo_head']:.4f}, "
                     f"phys={losses_view['moisture_budget']:.4f}) "
-                    f"| lr={lr:.2e} | t={elapsed/3600:.2f}h "
+                    f"| lr={lr:.2e} | t={elapsed / 3600:.2f}h "
                     f"| nan_skipped={self._nonfinite_train_batches} "
                     f"| grad_skipped={self._nonfinite_grad_steps}"
                 )
-                self.metrics.log({
-                    "split": "train", "epoch": epoch, "batch": batch_in_epoch,
-                    "step": self.global_step, "loss": step_loss,
-                    "grid": losses_view["grid"],
-                    "spectral": losses_view["spectral"],
-                    "mjo_head": losses_view["mjo_head"],
-                    "moisture_budget": losses_view["moisture_budget"],
-                    "lr": lr, "rollout_k": k,
-                    "detached": use_detached,
-                    "nan_skipped_total": self._nonfinite_train_batches,
-                    "nonfinite_grad_steps_total": self._nonfinite_grad_steps,
-                })
+                self.metrics.log(
+                    {
+                        "split": "train",
+                        "epoch": epoch,
+                        "batch": batch_in_epoch,
+                        "step": self.global_step,
+                        "loss": step_loss,
+                        "grid": losses_view["grid"],
+                        "spectral": losses_view["spectral"],
+                        "mjo_head": losses_view["mjo_head"],
+                        "moisture_budget": losses_view["moisture_budget"],
+                        "lr": lr,
+                        "rollout_k": k,
+                        "detached": use_detached,
+                        "nan_skipped_total": self._nonfinite_train_batches,
+                        "nonfinite_grad_steps_total": self._nonfinite_grad_steps,
+                    }
+                )
 
         if isinstance(sampler, ResumableDistributedSampler):
             sampler.skip_samples = 0
@@ -1025,12 +1209,13 @@ class Trainer:
         here and log every surf/atmos prediction variable so FIX 1-2 can be
         *confirmed* (expect: no PRED.* non-finite) rather than assumed.
         """
+
         def rng(t):
             t = t.float()
             fin = torch.isfinite(t)
             tag = "" if fin.all() else f" NON-FINITE({int((~fin).sum())})"
             v = t[fin]
-            return (f"[{v.min():.3e}, {v.max():.3e}]{tag}" if v.numel() else "[empty]")
+            return f"[{v.min():.3e}, {v.max():.3e}]{tag}" if v.numel() else "[empty]"
 
         lines = []
         # Inputs: ALL surface + ALL atmos (not just q, t).
@@ -1041,14 +1226,18 @@ class Trainer:
 
         # The missing measurement: the model's own prediction, per variable.
         self.model.eval()
-        with torch.amp.autocast('cuda', enabled=self.use_amp, dtype=self.amp_dtype):
+        with torch.amp.autocast("cuda", enabled=self.use_amp, dtype=self.amp_dtype):
             out = self.model(in_batch)
         pred = out[0] if isinstance(out, tuple) else out
         for attr in ("surf_vars", "atmos_vars"):
             for name, t in getattr(pred, attr).items():
                 lines.append(f"PRED.{attr[:4]}.{name}={rng(t)}")
 
-        tgt = target_dict_list[0] if isinstance(target_dict_list, list) else target_dict_list
+        tgt = (
+            target_dict_list[0]
+            if isinstance(target_dict_list, list)
+            else target_dict_list
+        )
         for name, t in list(tgt.items())[:6]:
             lines.append(f"tgt.{name}={rng(t)}")
 
@@ -1060,10 +1249,13 @@ class Trainer:
         val_loss, n, skipped = 0.0, 0, 0
         logged_bad = False
         for batch in self.val_loader:
-            if self.max_val_batches is not None and (n + skipped) >= self.max_val_batches:
+            if (
+                self.max_val_batches is not None
+                and (n + skipped) >= self.max_val_batches
+            ):
                 break
             in_batch, target_dict_list = self._prep_batch(batch)
-            with torch.amp.autocast('cuda', enabled=self.use_amp, dtype=self.amp_dtype):
+            with torch.amp.autocast("cuda", enabled=self.use_amp, dtype=self.amp_dtype):
                 losses = self._compute_loss(in_batch, target_dict_list, epoch=epoch)
             total = losses["total"].item()
             if not math.isfinite(total):
@@ -1080,9 +1272,11 @@ class Trainer:
         # v3 FIX: all-skipped must surface as NaN, never as a fake 0.0
         # ("0.0 < inf" would have marked every broken epoch as new-best).
         if n == 0:
-            log.error(f"Epoch {epoch:03d} | VALIDATION PRODUCED ZERO FINITE BATCHES "
-                      f"({skipped} skipped)  - reporting NaN. Run "
-                      f"tools/diagnose_val_nan.py against the val years.")
+            log.error(
+                f"Epoch {epoch:03d} | VALIDATION PRODUCED ZERO FINITE BATCHES "
+                f"({skipped} skipped)  - reporting NaN. Run "
+                f"tools/diagnose_val_nan.py against the val years."
+            )
             mean_val = float("nan")
         else:
             mean_val = val_loss / n
@@ -1095,10 +1289,20 @@ class Trainer:
             dist.all_reduce(t, op=dist.ReduceOp.AVG)
             mean_val = t.item()
         if self.is_main:
-            log.info(f"Epoch {epoch:03d} | VAL loss={mean_val:.4f} "
-                     f"({n} ok, {skipped} skipped)")
-            self.metrics.log({"split": "val", "epoch": epoch, "step": self.global_step,
-                              "loss": mean_val, "n_ok": n, "n_skipped": skipped})
+            log.info(
+                f"Epoch {epoch:03d} | VAL loss={mean_val:.4f} "
+                f"({n} ok, {skipped} skipped)"
+            )
+            self.metrics.log(
+                {
+                    "split": "val",
+                    "epoch": epoch,
+                    "step": self.global_step,
+                    "loss": mean_val,
+                    "n_ok": n,
+                    "n_skipped": skipped,
+                }
+            )
         return mean_val
 
     # ------------------------------------------------------------------
@@ -1124,8 +1328,14 @@ class Trainer:
                 is_best = math.isfinite(val_loss) and val_loss < self.best_val
                 if is_best:
                     self.best_val = val_loss
-                self._save(f"epoch_{epoch:03d}", epoch + 1, 0,
-                           val_loss=val_loss, is_best=is_best, reason="epoch-end")
+                self._save(
+                    f"epoch_{epoch:03d}",
+                    epoch + 1,
+                    0,
+                    val_loss=val_loss,
+                    is_best=is_best,
+                    reason="epoch-end",
+                )
             else:
                 self._save(f"epoch_{epoch:03d}", epoch + 1, 0, reason="epoch-end")
 

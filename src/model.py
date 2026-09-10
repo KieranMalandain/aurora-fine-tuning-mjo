@@ -22,15 +22,12 @@ Checkpoint loading
 randomly initialized and silently absent from the pretrained checkpoint.
 """
 
-import dataclasses
-from typing import Optional, Union
-
 import torch
-import torch.nn as nn
 from aurora import Aurora, AuroraSmallPretrained
 from aurora.batch import Batch
 from aurora.model.lora import LoRA, LoRARollout
 from aurora.normalisation import locations, scales
+from torch import nn
 
 # Aurora's built-in default surface variables (from Aurora.__init__ signature).
 # Any variable in our config's surface_variables list that is NOT here was
@@ -42,6 +39,7 @@ _AURORA_DEFAULT_SURF_VARS: frozenset[str] = frozenset({"2t", "10u", "10v", "msl"
 # ---------------------------------------------------------------------------
 # MJO head
 # ---------------------------------------------------------------------------
+
 
 class MJOHead(nn.Module):
     """Lightweight MLP that predicts (RMM1, RMM2, Amplitude) from pooled
@@ -110,15 +108,17 @@ class MJOHead(nn.Module):
         patch_size = lat.shape[0] // n_h
         # Patch centres are at indices patch_size//2, 3*patch_size//2, ...
         patch_lat = lat[patch_size // 2 :: patch_size]  # shape (n_h,)
-        patch_lat = patch_lat[:n_h]                     # guard against rounding
+        patch_lat = patch_lat[:n_h]  # guard against rounding
 
         # Tropical mask over the patch-lat dimension.
-        trop_mask = (patch_lat >= self.lat_south) & (patch_lat <= self.lat_north)  # (n_h,)
+        trop_mask = (patch_lat >= self.lat_south) & (
+            patch_lat <= self.lat_north
+        )  # (n_h,)
 
         # Pool: mean over levels, tropical latitudes, and all longitudes.
         # Shape after tropical slice: (B, n_levels, n_trop, n_w, D)
         x_trop = x_spatial[:, :, trop_mask, :, :]  # (B, n_levels, n_trop, n_w, D)
-        x_pooled = x_trop.mean(dim=(1, 2, 3))       # (B, D)
+        x_pooled = x_trop.mean(dim=(1, 2, 3))  # (B, D)
 
         return self.mlp(x_pooled)  # (B, 3)
 
@@ -126,6 +126,7 @@ class MJOHead(nn.Module):
 # ---------------------------------------------------------------------------
 # Wrapper model
 # ---------------------------------------------------------------------------
+
 
 class AuroraMJO(nn.Module):
     """Aurora backbone wrapped with an optional MJO prediction head.
@@ -153,7 +154,7 @@ class AuroraMJO(nn.Module):
     def __init__(
         self,
         backbone: Aurora,
-        mjo_head: Optional[MJOHead] = None,
+        mjo_head: MJOHead | None = None,
     ) -> None:
         super().__init__()
         self.backbone = backbone
@@ -163,9 +164,7 @@ class AuroraMJO(nn.Module):
     # Forward
     # ------------------------------------------------------------------
 
-    def forward(
-        self, batch: Batch
-    ) -> Union[Batch, tuple[Batch, torch.Tensor]]:
+    def forward(self, batch: Batch) -> Batch | tuple[Batch, torch.Tensor]:
         """Run the dual-head forward pass.
 
         When the MJO head is disabled this is a transparent wrapper around
@@ -192,7 +191,7 @@ class AuroraMJO(nn.Module):
         # ------------------------------------------------------------------
         _encoder_output: dict[str, object] = {}
 
-        def _hook(module: nn.Module, inputs: tuple, output: torch.Tensor) -> None:  # noqa: ANN001
+        def _hook(module: nn.Module, inputs: tuple, output: torch.Tensor) -> None:
             _encoder_output["x"] = output
 
         hook_handle = self.backbone.encoder.register_forward_hook(_hook)
@@ -212,7 +211,7 @@ class AuroraMJO(nn.Module):
         # n_levels = backbone.encoder.latent_levels ( = 1 surf + C atmos latents)
         n_levels = self.backbone.encoder.latent_levels
         n_tokens = x_enc.shape[1]
-        n_spatial = n_tokens // n_levels            # H_p * W_p
+        n_spatial = n_tokens // n_levels  # H_p * W_p
         # Infer n_h, n_w from the input batch lat/lon lengths.
         p = self.backbone.patch_size
         # Use the *original* batch lat/lon (before crop) to get H, W;
@@ -247,6 +246,7 @@ class AuroraMJO(nn.Module):
 # ---------------------------------------------------------------------------
 # Freezing helpers
 # ---------------------------------------------------------------------------
+
 
 def _is_lora_param(name: str, module: nn.Module) -> bool:
     """Return True if *module* is a LoRA adapter layer.
@@ -296,9 +296,7 @@ def freeze_backbone(
                     param.requires_grad_(True)
 
     # --- Step 3: unfreeze new-variable patch embeddings ---
-    injected_vars = [
-        v for v in new_surf_vars if v not in _AURORA_DEFAULT_SURF_VARS
-    ]
+    injected_vars = [v for v in new_surf_vars if v not in _AURORA_DEFAULT_SURF_VARS]
     if injected_vars:
         surf_embed = backbone.encoder.surf_token_embeds
         for var in injected_vars:
@@ -333,8 +331,10 @@ def freeze_backbone(
                         "decoder.surf_heads; skipping unfreeze."
                     )
         else:
-            print("[freeze_backbone] WARNING: backbone.decoder.surf_heads "
-                  "not found; injected-variable decoder heads NOT unfrozen.")
+            print(
+                "[freeze_backbone] WARNING: backbone.decoder.surf_heads "
+                "not found; injected-variable decoder heads NOT unfrozen."
+            )
 
     # --- Step 5 (FIX 6, AURORA_MJO_GAMEPLAN §Finding 6): unfreeze the `msl`
     # decoder head. ---
@@ -354,12 +354,16 @@ def freeze_backbone(
     if msl_surf_heads is not None and "msl" in msl_surf_heads:
         for p in msl_surf_heads["msl"].parameters():
             p.requires_grad_(True)
-        print("[freeze_backbone] Unfroze decoder head for 'msl' (FIX 6: "
-              "renormalized as surface pressure proxy)")
+        print(
+            "[freeze_backbone] Unfroze decoder head for 'msl' (FIX 6: "
+            "renormalized as surface pressure proxy)"
+        )
     else:
-        print("[freeze_backbone] WARNING: 'msl' not found in "
-              "decoder.surf_heads; msl decoder head NOT unfrozen (FIX 6 "
-              "not applied).")
+        print(
+            "[freeze_backbone] WARNING: 'msl' not found in "
+            "decoder.surf_heads; msl decoder head NOT unfrozen (FIX 6 "
+            "not applied)."
+        )
 
 
 def _log_param_counts(model: nn.Module, label: str = "model") -> None:
@@ -377,13 +381,13 @@ def _log_param_counts(model: nn.Module, label: str = "model") -> None:
     frozen = total - trainable
 
     print(
-        f"\n{'='*60}\n"
+        f"\n{'=' * 60}\n"
         f" Parameter audit: {label}\n"
-        f"{'='*60}\n"
+        f"{'=' * 60}\n"
         f"  Total      : {total:>12,}\n"
-        f"  Trainable  : {trainable:>12,}  ({100*trainable/max(total,1):.2f}%)\n"
-        f"  Frozen     : {frozen:>12,}  ({100*frozen/max(total,1):.2f}%)\n"
-        f"{'='*60}"
+        f"  Trainable  : {trainable:>12,}  ({100 * trainable / max(total, 1):.2f}%)\n"
+        f"  Frozen     : {frozen:>12,}  ({100 * frozen / max(total, 1):.2f}%)\n"
+        f"{'=' * 60}"
     )
 
     # Per-child breakdown (only if they have params)
@@ -392,9 +396,7 @@ def _log_param_counts(model: nn.Module, label: str = "model") -> None:
         if c_total == 0:
             continue
         c_train = sum(p.numel() for p in child.parameters() if p.requires_grad)
-        print(
-            f"  {child_name:<30}  trainable={c_train:>10,} / {c_total:>10,}"
-        )
+        print(f"  {child_name:<30}  trainable={c_train:>10,} / {c_total:>10,}")
     print()
 
 
@@ -402,7 +404,8 @@ def _log_param_counts(model: nn.Module, label: str = "model") -> None:
 # Factory
 # ---------------------------------------------------------------------------
 
-def load_model(config: dict, norm_stats: Optional[dict] = None) -> AuroraMJO:
+
+def load_model(config: dict, norm_stats: dict | None = None) -> AuroraMJO:
     """Build and return an :class:`AuroraMJO` model.
 
     Args:
@@ -435,10 +438,12 @@ def load_model(config: dict, norm_stats: Optional[dict] = None) -> AuroraMJO:
             locations[var_name] = stats["mean"]
             scales[var_name] = stats["std"]
             print(f"   - {var_name}: mean={stats['mean']:.4f}, std={stats['std']:.4f}")
-    
+
     if config.get("gradient_checkpointing", False):
         print("Enabling gradient checkpointing")
-        backbone.configure_activation_checkpointing(module_names=("Swin3DTransformerBackbone",))
+        backbone.configure_activation_checkpointing(
+            module_names=("Swin3DTransformerBackbone",)
+        )
 
     # ------------------------------------------------------------------
     # LoRA-aware weight freezing
@@ -449,7 +454,9 @@ def load_model(config: dict, norm_stats: Optional[dict] = None) -> AuroraMJO:
     # full-fine-tune path the caller can opt in by setting
     # config['freeze_backbone'] = True explicitly.
     if config.get("freeze_backbone", True):
-        print("Freezing backbone (keeping LoRA adapters + new-var embeddings trainable)")
+        print(
+            "Freezing backbone (keeping LoRA adapters + new-var embeddings trainable)"
+        )
         freeze_backbone(
             backbone=backbone,
             new_surf_vars=tuple(config["surface_variables"]),
@@ -461,7 +468,7 @@ def load_model(config: dict, norm_stats: Optional[dict] = None) -> AuroraMJO:
     # ------------------------------------------------------------------
     # MJO head (optional)
     # ------------------------------------------------------------------
-    mjo_head: Optional[MJOHead] = None
+    mjo_head: MJOHead | None = None
     head_cfg = config.get("mjo_head", {})
     if head_cfg.get("enabled", False):
         # embed_dim differs by model size:
@@ -492,4 +499,3 @@ def load_model(config: dict, norm_stats: Optional[dict] = None) -> AuroraMJO:
     _log_param_counts(model, label="AuroraMJO")
 
     return model
-    

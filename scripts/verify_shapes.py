@@ -8,15 +8,15 @@ Run:
   python scripts/verify_shapes.py
 """
 
-import sys
 import os
+import sys
 
 # Same HF_HOME workaround used in train.py
 if "NERSC_HOST" in os.environ and "HF_HOME" not in os.environ:
     os.environ["HF_HOME"] = f"/tmp/hf_home_{os.environ.get('USER', 'default')}"
 
 import yaml
-import torch
+
 
 def main():
     # Load config
@@ -32,6 +32,7 @@ def main():
 
     # Instantiate dataset with a small year range (just 1 year for speed)
     from src.dataset import LANLMJODataset
+
     ds = LANLMJODataset(
         start_year=2016,
         end_year=2016,
@@ -48,7 +49,7 @@ def main():
         status = "✓" if ndim == 2 else "✗ WRONG (expected 2D)"
         if ndim != 2:
             all_ok = False
-        print(f"  {name:>4s}: shape={str(shape):<20s} ndim={ndim}  {status}")
+        print(f"  {name:>4s}: shape={shape!s:<20s} ndim={ndim}  {status}")
 
     # Fetch one sample
     print("\n--- Sample 0 Shapes ---")
@@ -69,7 +70,7 @@ def main():
         status = "✓" if ndim == 2 else "✗ WRONG"
         if ndim != 2:
             all_ok = False
-        print(f"    {k:>5s}: {str(shape):<20s} {status}")
+        print(f"    {k:>5s}: {shape!s:<20s} {status}")
 
     print("\n  Metadata:")
     print(f"    lat:          {in_batch.metadata.lat.shape}")

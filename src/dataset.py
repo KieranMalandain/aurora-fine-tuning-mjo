@@ -43,16 +43,15 @@
 # here once.
 
 import warnings
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 import xarray as xr
-from torch.utils.data import Dataset
-
 from aurora import Batch, Metadata
+from torch.utils.data import Dataset
 
 _DEFAULT_NERSC_ROOT = "/global/cfs/cdirs/m4946/xiaoming/zm4946.MachLearn/PrcsPrep/prcs.ERA5/prcs.ERA5.Remap/Results"
 
@@ -62,20 +61,20 @@ AURORA_PLEVS = [50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 850, 925, 1000]
 # NOTE — msl proxy: 'Ps' (surface pressure) stands in for 'msl' (missing from
 # the LANL dataset).  Swap step_subdir + native name when real MSL lands.
 SURFACE_VAR_MAP = {
-    '2t':   ('Step02/ERA5.remap_180x360MODIS_6hrInst/T2',          '*', 't2'),
-    '10u':  ('Step02/ERA5.remap_180x360MODIS_6hrInst/U10',         '*', 'u10'),
-    '10v':  ('Step02/ERA5.remap_180x360MODIS_6hrInst/V10',         '*', 'v10'),
-    'msl':  ('Step02/ERA5.remap_180x360MODIS_6hrInst/PS',          '*', 'ps'),
-    'ttr':  ('Step03/ERA5.remap_180x360MODIS_6hrInst/meanTNLWFLX', '*', 'mtnlwrf'),
-    'tcwv': ('Step02/ERA5.remap_180x360MODIS_6hrInst/tcwv',        '*', 'tcwv'),
+    "2t": ("Step02/ERA5.remap_180x360MODIS_6hrInst/T2", "*", "t2"),
+    "10u": ("Step02/ERA5.remap_180x360MODIS_6hrInst/U10", "*", "u10"),
+    "10v": ("Step02/ERA5.remap_180x360MODIS_6hrInst/V10", "*", "v10"),
+    "msl": ("Step02/ERA5.remap_180x360MODIS_6hrInst/PS", "*", "ps"),
+    "ttr": ("Step03/ERA5.remap_180x360MODIS_6hrInst/meanTNLWFLX", "*", "mtnlwrf"),
+    "tcwv": ("Step02/ERA5.remap_180x360MODIS_6hrInst/tcwv", "*", "tcwv"),
 }
 
 ATMOS_VAR_MAP = {
-    'z': ('Step01/ERA5.remap_180x360MODIS_6hrInst/gopt', '*', 'z'),
-    'q': ('Step01/ERA5.remap_180x360MODIS_6hrInst/sphu', '*', 'q'),
-    't': ('Step01/ERA5.remap_180x360MODIS_6hrInst/tprt', '*', 't'),
-    'u': ('Step01/ERA5.remap_180x360MODIS_6hrInst/uWnd', '*', 'u'),
-    'v': ('Step01/ERA5.remap_180x360MODIS_6hrInst/vWnd', '*', 'v'),
+    "z": ("Step01/ERA5.remap_180x360MODIS_6hrInst/gopt", "*", "z"),
+    "q": ("Step01/ERA5.remap_180x360MODIS_6hrInst/sphu", "*", "q"),
+    "t": ("Step01/ERA5.remap_180x360MODIS_6hrInst/tprt", "*", "t"),
+    "u": ("Step01/ERA5.remap_180x360MODIS_6hrInst/uWnd", "*", "u"),
+    "v": ("Step01/ERA5.remap_180x360MODIS_6hrInst/vWnd", "*", "v"),
 }
 
 STEP_HOURS = 6  # dataset cadence; must match Aurora's 6 h step
@@ -88,7 +87,9 @@ def _upsample_to_aurora(tensor):
         tensor = tensor.unsqueeze(0).unsqueeze(0)
     elif len(original_shape) == 3:
         tensor = tensor.unsqueeze(0)
-    upsampled = F.interpolate(tensor, size=(720, 1440), mode='bilinear', align_corners=False)
+    upsampled = F.interpolate(
+        tensor, size=(720, 1440), mode="bilinear", align_corners=False
+    )
     if len(original_shape) == 2:
         return upsampled.squeeze(0).squeeze(0)
     elif len(original_shape) == 3:
@@ -114,19 +115,27 @@ class LANLMJODataset(Dataset):
 
     native_resolution = (180, 360)
 
-    def __init__(self, start_year: int, end_year: int,
-                 root_dir: str | Path | None = None,
-                 slt_path: str | Path | None = None,
-                 max_rollout_steps: int = 1):
+    def __init__(
+        self,
+        start_year: int,
+        end_year: int,
+        root_dir: str | Path | None = None,
+        slt_path: str | Path | None = None,
+        max_rollout_steps: int = 1,
+    ):
         if root_dir is None:
             warnings.warn(
                 f"root_dir not provided; falling back to default NERSC path: "
-                f"{_DEFAULT_NERSC_ROOT}.", stacklevel=2)
+                f"{_DEFAULT_NERSC_ROOT}.",
+                stacklevel=2,
+            )
             root_dir = _DEFAULT_NERSC_ROOT
         self.root_dir = Path(root_dir)
 
         if slt_path is None:
-            warnings.warn("slt_path not provided; falling back to default.", stacklevel=2)
+            warnings.warn(
+                "slt_path not provided; falling back to default.", stacklevel=2
+            )
             slt_path = "/pscratch/sd/k/kam352/Aurora/slt/slt_data.nc"
         self.slt_path = Path(slt_path)
 
@@ -134,7 +143,9 @@ class LANLMJODataset(Dataset):
         self.end_year = end_year
         self.max_rollout_steps = max(1, max_rollout_steps)
 
-        print(f"Initializing LANL MJO Dataset ({start_year}-{end_year}) [timestamp-aligned v3]...")
+        print(
+            f"Initializing LANL MJO Dataset ({start_year}-{end_year}) [timestamp-aligned v3]..."
+        )
 
         # Aurora metadata coordinates are at the UPSAMPLED 0.25° resolution.
         self.lat = torch.linspace(90, -90, 720)
@@ -143,8 +154,16 @@ class LANLMJODataset(Dataset):
 
         # Hard year-range bounds in unix seconds — enforced on timestamps,
         # NOT on file names.  This is what closes the 2016-leakage hole.
-        self._t_min = int(np.datetime64(f"{start_year}-01-01T00:00:00").astype("datetime64[s]").astype(np.int64))
-        self._t_max = int(np.datetime64(f"{end_year}-12-31T23:59:59").astype("datetime64[s]").astype(np.int64))
+        self._t_min = int(
+            np.datetime64(f"{start_year}-01-01T00:00:00")
+            .astype("datetime64[s]")
+            .astype(np.int64)
+        )
+        self._t_max = int(
+            np.datetime64(f"{end_year}-12-31T23:59:59")
+            .astype("datetime64[s]")
+            .astype(np.int64)
+        )
 
         # 1. Static variables (small, loaded once, fork-safe tensors)
         self.static_vars = self._load_static_vars()
@@ -188,7 +207,8 @@ class LANLMJODataset(Dataset):
                 warnings.warn(
                     f"[LANLMJODataset] No files found for '{aurora_name}' in {var_dir} "
                     f"for years {self.start_year}–{self.end_year}. Skipping variable.",
-                    stacklevel=2)
+                    stacklevel=2,
+                )
                 continue
             result[aurora_name] = (uniq, native_name)
         return result
@@ -210,7 +230,10 @@ class LANLMJODataset(Dataset):
         all_maps: dict[str, dict[int, tuple[int, int]]] = {}
         report_rows = []
 
-        for aurora_name, (files, _native) in {**self.surf_file_map, **self.atmos_file_map}.items():
+        for aurora_name, (files, _native) in {
+            **self.surf_file_map,
+            **self.atmos_file_map,
+        }.items():
             ts_map: dict[int, tuple[int, int]] = {}
             n_total, n_dropped, n_dupes = 0, 0, 0
             for fi, f in enumerate(files):
@@ -219,14 +242,16 @@ class LANLMJODataset(Dataset):
                 n_total += len(secs)
                 for li, s in enumerate(secs.tolist()):
                     if s < self._t_min or s > self._t_max:
-                        n_dropped += 1          # out-of-range (this was the leak)
+                        n_dropped += 1  # out-of-range (this was the leak)
                         continue
                     if s in ts_map:
-                        n_dupes += 1            # overlapping/duplicate file content
+                        n_dupes += 1  # overlapping/duplicate file content
                         continue
                     ts_map[s] = (fi, li)
             all_maps[aurora_name] = ts_map
-            report_rows.append((aurora_name, len(files), n_total, len(ts_map), n_dropped, n_dupes))
+            report_rows.append(
+                (aurora_name, len(files), n_total, len(ts_map), n_dropped, n_dupes)
+            )
 
         # Intersection across all variables.
         keysets = [set(m.keys()) for m in all_maps.values()]
@@ -236,25 +261,27 @@ class LANLMJODataset(Dataset):
         # consumes timestamps  t_i (history t-6h), t_i+6h (current t),
         # then targets t_i+12h ... t_i+(1+max_rollout_steps)*6h.
         step_s = STEP_HOURS * 3600
-        need = 1 + self.max_rollout_steps + 1   # 2 inputs + max_rollout targets
+        need = 1 + self.max_rollout_steps + 1  # 2 inputs + max_rollout targets
         common_arr = np.asarray(common, dtype=np.int64)
         common_pos = {s: i for i, s in enumerate(common)}
         valid_starts: list[int] = []
         for i in range(len(common) - need + 1):
             # exact 6-hourly chain check (vectorized slice compare)
-            if np.all(np.diff(common_arr[i:i + need]) == step_s):
+            if np.all(np.diff(common_arr[i : i + need]) == step_s):
                 valid_starts.append(i)
 
         self._var_ts_map = all_maps
-        self._timeline = common_arr             # int64 seconds, sorted
+        self._timeline = common_arr  # int64 seconds, sorted
         self._valid_starts = np.asarray(valid_starts, dtype=np.int64)
         self.num_samples = len(self._valid_starts)
 
         # ---- Alignment report (prints once per rank at init) --------------
         union = set.union(*keysets) if keysets else set()
-        print(f"  [align] requested range {self.start_year}-{self.end_year} | "
-              f"common timeline: {len(common)} steps | union: {len(union)} | "
-              f"valid {self.max_rollout_steps}-step samples: {self.num_samples}")
+        print(
+            f"  [align] requested range {self.start_year}-{self.end_year} | "
+            f"common timeline: {len(common)} steps | union: {len(union)} | "
+            f"valid {self.max_rollout_steps}-step samples: {self.num_samples}"
+        )
         for name, nf, ntot, nkept, ndrop, ndup in report_rows:
             miss = len(common) and (len(union) - nkept)
             flag = ""
@@ -264,10 +291,14 @@ class LANLMJODataset(Dataset):
                 flag += f"  DUPLICATES={ndup}"
             if nkept != len(common):
                 flag += f"  (this variable limits/differs from intersection by {nkept - len(common):+d})"
-            print(f"  [align]   {name:>5}: files={nf:<4} raw_steps={ntot:<7} kept={nkept:<7}{flag}")
+            print(
+                f"  [align]   {name:>5}: files={nf:<4} raw_steps={ntot:<7} kept={nkept:<7}{flag}"
+            )
         gaps = (len(common) - need + 1) - self.num_samples if len(common) >= need else 0
         if gaps > 0:
-            print(f"  [align]   NOTE: {gaps} potential sample starts excluded by 6-hourly gaps.")
+            print(
+                f"  [align]   NOTE: {gaps} potential sample starts excluded by 6-hourly gaps."
+            )
 
         if self.num_samples <= 0:
             raise RuntimeError(
@@ -280,13 +311,15 @@ class LANLMJODataset(Dataset):
             return []
         ref_files = next(iter(self.atmos_file_map.values()))[0]
         with xr.open_dataset(str(ref_files[0]), engine="netcdf4") as ds:
-            if 'lev' in ds.coords:
+            if "lev" in ds.coords:
                 all_levs = ds.lev.values
-            elif 'level' in ds.coords:
+            elif "level" in ds.coords:
                 all_levs = ds.level.values
             else:
-                warnings.warn("[LANLMJODataset] No 'lev'/'level' coord found; using all levels.",
-                              stacklevel=2)
+                warnings.warn(
+                    "[LANLMJODataset] No 'lev'/'level' coord found; using all levels.",
+                    stacklevel=2,
+                )
                 return []
         return [int(np.argmin(np.abs(all_levs - p))) for p in AURORA_PLEVS]
 
@@ -312,38 +345,47 @@ class LANLMJODataset(Dataset):
 
         try:
             with xr.open_dataset(z_files[0], engine="netcdf4") as ds_z:
-                z_arr = ds_z['Z'].values
+                z_arr = ds_z["Z"].values
             z_tensor = _upsample_to_aurora(_clean(torch.from_numpy(z_arr).float()))
         except Exception as e:
-            warnings.warn(f"[LANLMJODataset] Failed to load invariant Z: {e}. Using zeros.")
+            warnings.warn(
+                f"[LANLMJODataset] Failed to load invariant Z: {e}. Using zeros."
+            )
             z_tensor = torch.zeros(720, 1440)
 
         try:
             with xr.open_dataset(lsm_files[0], engine="netcdf4") as ds_lsm:
-                lsm_arr = ds_lsm['LSM'].values
+                lsm_arr = ds_lsm["LSM"].values
             lsm_tensor = _upsample_to_aurora(_clean(torch.from_numpy(lsm_arr).float()))
         except Exception as e:
-            warnings.warn(f"[LANLMJODataset] Failed to load invariant LSM: {e}. Using zeros.")
+            warnings.warn(
+                f"[LANLMJODataset] Failed to load invariant LSM: {e}. Using zeros."
+            )
             lsm_tensor = torch.zeros(720, 1440)
 
         with xr.open_dataset(self.slt_path, engine="netcdf4") as ds_slt:
-            slt_arr = ds_slt['slt'].values
+            slt_arr = ds_slt["slt"].values
         slt_tensor = _clean(torch.from_numpy(slt_arr).float())
         slt_tensor = _ensure_2d(slt_tensor)[:720, :]
 
-        return {"z": _ensure_2d(z_tensor), "lsm": _ensure_2d(lsm_tensor), "slt": slt_tensor}
+        return {
+            "z": _ensure_2d(z_tensor),
+            "lsm": _ensure_2d(lsm_tensor),
+            "slt": slt_tensor,
+        }
 
     # ------------------------------------------------------------------
     # Per-item read (forked workers — must stay fork-safe: open/close fresh)
     # ------------------------------------------------------------------
 
-    def _read_var_at_times(self, aurora_name: str, files, native_name: str,
-                           ts_list: list[int]) -> np.ndarray:
+    def _read_var_at_times(
+        self, aurora_name: str, files, native_name: str, ts_list: list[int]
+    ) -> np.ndarray:
         """Read one variable at explicit timestamps via ITS OWN (fi, li) map."""
         ts_map = self._var_ts_map[aurora_name]
         arrays = []
         for s in ts_list:
-            fi, li = ts_map[s]     # guaranteed present: timeline ⊆ every var's map
+            fi, li = ts_map[s]  # guaranteed present: timeline ⊆ every var's map
             with xr.open_dataset(str(files[fi]), engine="netcdf4") as ds:
                 arr = ds[native_name].isel(time=li).values
             arrays.append(arr)
@@ -359,21 +401,23 @@ class LANLMJODataset(Dataset):
     def __getitem__(self, idx):
         i0 = int(self._valid_starts[idx])
         step_s = STEP_HOURS * 3600
-        t_hist = int(self._timeline[i0])            # t - 6h
-        t_curr = t_hist + step_s                    # t
+        t_hist = int(self._timeline[i0])  # t - 6h
+        t_curr = t_hist + step_s  # t
         input_ts = [t_hist, t_curr]
 
         def process_var(arr):
             # Zero (not clamp-to-3.4e38) BOTH NaN and Inf — the default
             # nan_to_num turns +Inf into the largest finite float, which is a
             # ready-made overflow bomb one matmul later.
-            return torch.nan_to_num(torch.from_numpy(arr), nan=0.0, posinf=0.0, neginf=0.0)
+            return torch.nan_to_num(
+                torch.from_numpy(arr), nan=0.0, posinf=0.0, neginf=0.0
+            )
 
         # --- Surface inputs ---
         surf_in = {}
         for aurora_name, (files, native_name) in self.surf_file_map.items():
             raw = self._read_var_at_times(aurora_name, files, native_name, input_ts)
-            surf_in[aurora_name] = process_var(raw)[None]      # (1, 2, H, W)
+            surf_in[aurora_name] = process_var(raw)[None]  # (1, 2, H, W)
 
         # --- Atmospheric inputs ---
         atmos_in = {}
@@ -381,7 +425,7 @@ class LANLMJODataset(Dataset):
             raw = self._read_var_at_times(aurora_name, files, native_name, input_ts)
             if self._plev_indices:
                 raw = raw[:, self._plev_indices, :, :]
-            atmos_in[aurora_name] = process_var(raw)[None]     # (1, 2, 13, H, W)
+            atmos_in[aurora_name] = process_var(raw)[None]  # (1, 2, 13, H, W)
 
         # --- Multi-step targets ---
         surf_targets_list, atmos_targets_list = [], []
@@ -390,7 +434,7 @@ class LANLMJODataset(Dataset):
             surf_out = {}
             for aurora_name, (files, native_name) in self.surf_file_map.items():
                 raw = self._read_var_at_times(aurora_name, files, native_name, tgt_ts)
-                surf_out[aurora_name] = process_var(raw)       # (1, H, W)
+                surf_out[aurora_name] = process_var(raw)  # (1, H, W)
             surf_targets_list.append(surf_out)
 
             atmos_out = {}
@@ -398,7 +442,7 @@ class LANLMJODataset(Dataset):
                 raw = self._read_var_at_times(aurora_name, files, native_name, tgt_ts)
                 if self._plev_indices:
                     raw = raw[:, self._plev_indices, :, :]
-                atmos_out[aurora_name] = process_var(raw)      # (1, 13, H, W)
+                atmos_out[aurora_name] = process_var(raw)  # (1, 13, H, W)
             atmos_targets_list.append(atmos_out)
 
         # --- Time tag straight from the timeline (no extra file open) ---

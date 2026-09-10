@@ -1,0 +1,14 @@
+# These hooks are a fast subset of scripts/check.py and not a substitute for it,
+# because pre-commit sees only staged files.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        # Pre-existing violations in legacy code (scripts/ and dataset.py) ignored until A3
+        args: [--fix, --ignore=F841, --ignore=F821, --ignore=F401, --ignore=E402, --ignore=E722]
+      - id: ruff-format
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.4
+    hooks:
+      - id: gitleaks

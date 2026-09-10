@@ -22,31 +22,40 @@ from aurora import Batch, Metadata
 sys.path.insert(0, ".")
 from src.model import load_model
 
-
 # ---------------------------------------------------------------------------
 # Tiny synthetic batch – matches AuroraSmallPretrained expectations.
 # ---------------------------------------------------------------------------
 # We use a very small spatial grid so the test is fast on CPU.
 # Aurora's patch_size=4, so H and W must be multiples of 4.
-H, W = 32, 64   # degrees: a stub, not real ERA5 resolution
+H, W = 32, 64  # degrees: a stub, not real ERA5 resolution
 ATMOS_LEVELS = (50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 850, 925, 1000)
-SURF_VARS = ("2t", "10u", "10v", "msl")  # default Aurora surf_vars; ttr/tcwv injection is a training concern
+SURF_VARS = (
+    "2t",
+    "10u",
+    "10v",
+    "msl",
+)  # default Aurora surf_vars; ttr/tcwv injection is a training concern
 
 # lat decreasing (90 ... -90 style), lon increasing (0...360)
 lat = torch.linspace(90, -90, H)
 lon = torch.linspace(0, 360 - 360 / W, W)
 
-B, T = 1, 2   # batch=1, history=2
+B, T = 1, 2  # batch=1, history=2
+
 
 def _rand_surf():
     return {v: torch.randn(B, T, H, W) for v in SURF_VARS}  # (B, T, H, W)
 
+
 def _rand_atmos():
-    return {v: torch.randn(B, T, len(ATMOS_LEVELS), H, W)
-            for v in ("z", "u", "v", "t", "q")}
+    return {
+        v: torch.randn(B, T, len(ATMOS_LEVELS), H, W) for v in ("z", "u", "v", "t", "q")
+    }
+
 
 def _rand_static():
     return {v: torch.randn(H, W) for v in ("lsm", "z", "slt")}
+
 
 batch = Batch(
     surf_vars=_rand_surf(),
@@ -64,7 +73,7 @@ batch = Batch(
 # Shared config skeleton
 # ---------------------------------------------------------------------------
 BASE_CONFIG = dict(
-    model_type="small",   # AuroraSmallPretrained
+    model_type="small",  # AuroraSmallPretrained
     surface_variables=list(SURF_VARS),
     use_lora=False,
     gradient_checkpointing=False,
@@ -110,8 +119,10 @@ assert isinstance(out_state, Batch), f"Expected Batch, got {type(out_state)}"
 assert isinstance(out_mjo, torch.Tensor), f"Expected Tensor, got {type(out_mjo)}"
 assert out_mjo.shape == (B, 3), f"Expected ({B}, 3), got {out_mjo.shape}"
 print(f"  [PASS] returned (Batch, Tensor{list(out_mjo.shape)})")
-print(f"  MJO prediction: RMM1={out_mjo[0, 0]:.4f}  "
-      f"RMM2={out_mjo[0, 1]:.4f}  Amp={out_mjo[0, 2]:.4f}")
+print(
+    f"  MJO prediction: RMM1={out_mjo[0, 0]:.4f}  "
+    f"RMM2={out_mjo[0, 1]:.4f}  Amp={out_mjo[0, 2]:.4f}"
+)
 
 # ---------------------------------------------------------------------------
 # Test 3 – New MJO head params absent from backbone checkpoint → strict=False OK

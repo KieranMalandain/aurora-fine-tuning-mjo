@@ -1,0 +1,11 @@
+# Set default behavior to automatically normalize line endings to LF
+* text=auto eol=lf
+
+# Explicit binary files
+*.nc binary
+*.pt binary
+*.pdf binary
+*.png binary
+
+# Treat lockfile as binary for diffs so lockfile updates do not swamp reviews
+uv.lock -diff

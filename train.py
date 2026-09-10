@@ -38,12 +38,23 @@ if "NERSC_HOST" in os.environ:
     # Backup: monkey-patch filelock just in case the env var isn't enough
     try:
         import filelock
+
         class DummyLock:
-            def __init__(self, *args, **kwargs): pass
-            def acquire(self, *args, **kwargs): return self
-            def release(self, *args, **kwargs): pass
-            def __enter__(self): return self
-            def __exit__(self, *args, **kwargs): pass
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def acquire(self, *args, **kwargs):
+                return self
+
+            def release(self, *args, **kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args, **kwargs):
+                pass
+
         filelock.FileLock = DummyLock
     except ImportError:
         pass
@@ -62,8 +73,8 @@ os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 import numpy as np
 import torch
 import torch.distributed as dist
-from torch.nn.parallel import DistributedDataParallel as DDP
 import yaml
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 logging.basicConfig(
     level=logging.INFO,
@@ -76,6 +87,7 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Config helpers
 # ---------------------------------------------------------------------------
+
 
 def _deep_merge(base: dict, overlay: dict) -> dict:
     """Recursively merge `overlay` into a copy of `base` (overlay wins)."""
@@ -96,8 +108,9 @@ def load_config(path: str, mode: str | None) -> dict:
     if "modes" in raw:
         modes = raw.pop("modes")
         if mode is None:
-            raise SystemExit("--mode is required with a unified config "
-                             f"(available: {list(modes)})")
+            raise SystemExit(
+                f"--mode is required with a unified config (available: {list(modes)})"
+            )
         if mode not in modes:
             raise SystemExit(f"Unknown mode {mode!r}; available: {list(modes)}")
         cfg = _deep_merge(raw, modes[mode])
@@ -148,8 +161,10 @@ def auto_scale_memory(cfg: dict, world_size: int):
     if target_eff:
         accum = max(1, target_eff // max(1, world_size * bs))
         if accum != tcfg.get("grad_accum_steps", 1):
-            log.info(f"[auto] grad_accum_steps={accum} "
-                     f"(target_eff={target_eff}, world={world_size}, bs={bs})")
+            log.info(
+                f"[auto] grad_accum_steps={accum} "
+                f"(target_eff={target_eff}, world={world_size}, bs={bs})"
+            )
         tcfg["grad_accum_steps"] = accum
 
     if torch.cuda.is_available():
@@ -163,13 +178,19 @@ def auto_scale_memory(cfg: dict, world_size: int):
     # checkpointing illegal-memory-access (handoff §2).
     rcfg = tcfg.get("rollout", {})
     backprop = str(rcfg.get("backprop", "full")).lower()
-    if rcfg.get("enabled", False) and rcfg.get("max_steps", 1) >= 2 \
-            and backprop == "full" and not mcfg.get("gradient_checkpointing", False):
-        log.warning("[auto] full-BPTT rollout - forcing gradient_checkpointing=true "
-                    "(must be set BEFORE DDP wrap, never mid-run). NOTE: full-BPTT "
-                    "+ checkpointing currently crashes with an illegal memory "
-                    "access on Perlmutter; use rollout.backprop=detached unless "
-                    "tools/repro_ima_matrix.py has found a working combination.")
+    if (
+        rcfg.get("enabled", False)
+        and rcfg.get("max_steps", 1) >= 2
+        and backprop == "full"
+        and not mcfg.get("gradient_checkpointing", False)
+    ):
+        log.warning(
+            "[auto] full-BPTT rollout - forcing gradient_checkpointing=true "
+            "(must be set BEFORE DDP wrap, never mid-run). NOTE: full-BPTT "
+            "+ checkpointing currently crashes with an illegal memory "
+            "access on Perlmutter; use rollout.backprop=detached unless "
+            "tools/repro_ima_matrix.py has found a working combination."
+        )
         mcfg["gradient_checkpointing"] = True
 
     # Optional SDPA backend pin (IMA workaround knob): training.sdpa_backend:
@@ -180,7 +201,9 @@ def auto_scale_memory(cfg: dict, world_size: int):
         torch.backends.cuda.enable_flash_sdp(False)
         torch.backends.cuda.enable_mem_efficient_sdp(False)
         torch.backends.cuda.enable_math_sdp(True)
-        log.warning("[auto] SDPA pinned to MATH backend (flash/mem-efficient disabled).")
+        log.warning(
+            "[auto] SDPA pinned to MATH backend (flash/mem-efficient disabled)."
+        )
     return cfg
 
 
@@ -199,13 +222,14 @@ def _patch_config_for_smoke_test(cfg: dict) -> dict:
     cfg["data"]["use_dummy"] = True
     cfg["logging"]["log_every_n_steps"] = 1
     cfg["logging"]["val_every_n_epochs"] = 1
-    cfg["checkpointing"]["save_every_n_steps"] = 10 ** 9
+    cfg["checkpointing"]["save_every_n_steps"] = 10**9
     return cfg
 
 
 def _install_smoke_test_loader(cfg: dict, device: torch.device):
-    from aurora import Batch, Metadata
     import datetime
+
+    from aurora import Batch, Metadata
 
     H, W = 64, 128
     LEVELS = (50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 850, 925, 1000)
@@ -227,8 +251,10 @@ def _install_smoke_test_loader(cfg: dict, device: torch.device):
             static_vars={k: torch.zeros(H, W) for k in ("z", "lsm", "slt")},
             metadata=meta,
         )
-        target = {**{k: torch.randn(1, H, W) for k in SURF_KEYS},
-                  **{k: torch.randn(1, len(LEVELS), H, W) for k in ATMOS_KEYS}}
+        target = {
+            **{k: torch.randn(1, H, W) for k in SURF_KEYS},
+            **{k: torch.randn(1, len(LEVELS), H, W) for k in ATMOS_KEYS},
+        }
         return in_batch, target
 
     class _SyntheticLoader:
@@ -245,20 +271,36 @@ def _install_smoke_test_loader(cfg: dict, device: torch.device):
 # Main
 # ---------------------------------------------------------------------------
 
+
 def parse_args(argv=None):
-    p = argparse.ArgumentParser(description="Aurora MJO fine-tuning driver",
-                                formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    p = argparse.ArgumentParser(
+        description="Aurora MJO fine-tuning driver",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
     p.add_argument("--config", required=True, help="Path to YAML config.")
-    p.add_argument("--mode", default=None,
-                   choices=["baseline", "physics_informed", "lora", "combined"],
-                   help="Mode overlay to apply (required for unified configs).")
-    p.add_argument("--override", action="append", default=[], metavar="KEY=VALUE",
-                   help="Dot-notation config override; repeatable.")
-    p.add_argument("--smoke-test", action="store_true",
-                   help="Single synthetic step, no real data.")
-    p.add_argument("--resume", default="auto", metavar="auto|none|PATH",
-                   help="'auto' = latest ckpt in this mode's save_dir; "
-                        "'none' = fresh start; or an explicit path.")
+    p.add_argument(
+        "--mode",
+        default=None,
+        choices=["baseline", "physics_informed", "lora", "combined"],
+        help="Mode overlay to apply (required for unified configs).",
+    )
+    p.add_argument(
+        "--override",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="Dot-notation config override; repeatable.",
+    )
+    p.add_argument(
+        "--smoke-test", action="store_true", help="Single synthetic step, no real data."
+    )
+    p.add_argument(
+        "--resume",
+        default="auto",
+        metavar="auto|none|PATH",
+        help="'auto' = latest ckpt in this mode's save_dir; "
+        "'none' = fresh start; or an explicit path.",
+    )
     return p.parse_args(argv)
 
 
@@ -275,8 +317,10 @@ def main(argv=None):
     if use_ddp:
         dist.init_process_group(backend="nccl")
         torch.cuda.set_device(local_rank)
-        log.info(f"DDP initialised: rank={dist.get_rank()}/{world_size}, "
-                 f"local_rank={local_rank}")
+        log.info(
+            f"DDP initialised: rank={dist.get_rank()}/{world_size}, "
+            f"local_rank={local_rank}"
+        )
     is_main = (not use_ddp) or (dist.get_rank() == 0)
 
     # A100 free performance: TF32 matmuls for any residual fp32 ops.
@@ -317,12 +361,12 @@ def main(argv=None):
     norm_stats = model_cfg.get("norm_stats") or None
 
     if use_ddp and local_rank != 0:
-        dist.barrier()                       # wait for rank 0's download
+        dist.barrier()  # wait for rank 0's download
     model = load_model(model_cfg, norm_stats=norm_stats)
     if use_ddp and local_rank == 0:
-        dist.barrier()                       # release the other ranks
+        dist.barrier()  # release the other ranks
     if use_ddp:
-        dist.barrier()                       # everyone constructed
+        dist.barrier()  # everyone constructed
 
     # ------------------------------------------------------------------
     # 5. Resolve resume/warm-start BEFORE building trainer state.
@@ -353,8 +397,10 @@ def main(argv=None):
             else:
                 warm_start_path = Path(init_from)
             if warm_start_path is None or not Path(warm_start_path).exists():
-                log.warning(f"init_from={init_from!r} not found - training from "
-                            "pretrained Aurora weights only.")
+                log.warning(
+                    f"init_from={init_from!r} not found - training from "
+                    "pretrained Aurora weights only."
+                )
                 warm_start_path = None
 
     # ------------------------------------------------------------------
@@ -364,9 +410,12 @@ def main(argv=None):
     model = model.to(device)
     if use_ddp:
         has_mjo_head = model_cfg.get("mjo_head", {}).get("enabled", False)
-        model = DDP(model, device_ids=[local_rank],
-                    find_unused_parameters=has_mjo_head,
-                    gradient_as_bucket_view=True)
+        model = DDP(
+            model,
+            device_ids=[local_rank],
+            find_unused_parameters=has_mjo_head,
+            gradient_as_bucket_view=True,
+        )
         log.info("Model wrapped in DistributedDataParallel")
 
     # ------------------------------------------------------------------
@@ -379,9 +428,14 @@ def main(argv=None):
     else:
         train_loader, val_loader = None, None
 
-    trainer = Trainer(model=model, cfg=cfg, device=device,
-                      train_loader=train_loader, val_loader=val_loader,
-                      is_main=is_main)
+    trainer = Trainer(
+        model=model,
+        cfg=cfg,
+        device=device,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        is_main=is_main,
+    )
 
     if resume_path is not None:
         log.info(f"Resuming full training state from: {resume_path}")

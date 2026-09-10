@@ -54,7 +54,9 @@ class CheckpointManager:
         is_main:     True only on rank 0; other ranks no-op on save.
     """
 
-    def __init__(self, save_dir: str | Path, keep_last_n: int = 3, is_main: bool = True):
+    def __init__(
+        self, save_dir: str | Path, keep_last_n: int = 3, is_main: bool = True
+    ):
         self.save_dir = Path(save_dir)
         self.keep_last_n = max(1, keep_last_n)
         self.is_main = is_main
@@ -107,8 +109,8 @@ class CheckpointManager:
             "scheduler_state_dict": scheduler.state_dict() if scheduler else None,
             "grad_scaler_state_dict": grad_scaler.state_dict() if grad_scaler else None,
             # ---- resume counters (all three matter) -----------------------
-            "epoch": epoch,                    # epoch currently in progress
-            "global_step": global_step,        # optimizer steps completed
+            "epoch": epoch,  # epoch currently in progress
+            "global_step": global_step,  # optimizer steps completed
             "batch_in_epoch": batch_in_epoch,  # batches consumed THIS epoch
             "best_val": best_val,
             "val_loss": val_loss,
@@ -122,7 +124,9 @@ class CheckpointManager:
                 "python": random.getstate(),
                 "numpy": np.random.get_state(),
                 "torch": torch.get_rng_state(),
-                "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+                "cuda": torch.cuda.get_rng_state_all()
+                if torch.cuda.is_available()
+                else None,
             },
             "timestamp": time.time(),
         }
@@ -241,31 +245,45 @@ class CheckpointManager:
                 f"fresh init — expected when new variables were added): {missing}"
             )
         if unexpected:
-            log.warning(f"[ckpt] {len(unexpected)} UNEXPECTED keys ignored: {unexpected}")
+            log.warning(
+                f"[ckpt] {len(unexpected)} UNEXPECTED keys ignored: {unexpected}"
+            )
 
         counters = {
-            "epoch": 0, "global_step": 0, "batch_in_epoch": 0, "best_val": float("inf"),
-            "nonfinite_train_batches": 0, "nonfinite_grad_steps": 0,
+            "epoch": 0,
+            "global_step": 0,
+            "batch_in_epoch": 0,
+            "best_val": float("inf"),
+            "nonfinite_train_batches": 0,
+            "nonfinite_grad_steps": 0,
         }
         if weights_only_model:
-            log.info(f"[ckpt] warm-start (weights only) from {path.name} in {time.time()-t0:.1f}s")
+            log.info(
+                f"[ckpt] warm-start (weights only) from {path.name} in {time.time() - t0:.1f}s"
+            )
             return counters
 
         if optimizer is not None and ckpt.get("optimizer_state_dict"):
             try:
                 optimizer.load_state_dict(ckpt["optimizer_state_dict"])
             except (ValueError, KeyError, RuntimeError) as e:
-                log.warning(f"[ckpt] optimizer restore FAILED ({e}); continuing with fresh optimizer.")
+                log.warning(
+                    f"[ckpt] optimizer restore FAILED ({e}); continuing with fresh optimizer."
+                )
         if scheduler is not None and ckpt.get("scheduler_state_dict"):
             try:
                 scheduler.load_state_dict(ckpt["scheduler_state_dict"])
             except (ValueError, KeyError, RuntimeError) as e:
-                log.warning(f"[ckpt] scheduler restore FAILED ({e}); continuing with fresh scheduler.")
+                log.warning(
+                    f"[ckpt] scheduler restore FAILED ({e}); continuing with fresh scheduler."
+                )
         if grad_scaler is not None and ckpt.get("grad_scaler_state_dict"):
             try:
                 grad_scaler.load_state_dict(ckpt["grad_scaler_state_dict"])
             except (ValueError, KeyError, RuntimeError) as e:
-                log.warning(f"[ckpt] grad-scaler restore FAILED ({e}); continuing fresh.")
+                log.warning(
+                    f"[ckpt] grad-scaler restore FAILED ({e}); continuing fresh."
+                )
 
         if restore_rng and ckpt.get("rng"):
             try:
@@ -285,7 +303,7 @@ class CheckpointManager:
         log.info(
             f"[ckpt] resumed from {path.name}: epoch={counters['epoch']} "
             f"step={counters['global_step']} batch_in_epoch={counters['batch_in_epoch']} "
-            f"({time.time()-t0:.1f}s)"
+            f"({time.time() - t0:.1f}s)"
         )
         return counters
 
@@ -310,4 +328,3 @@ class MetricsLogger:
         record = {**record, "t": time.time()}
         with open(self.path, "a") as f:
             f.write(json.dumps(record) + "\n")
-            

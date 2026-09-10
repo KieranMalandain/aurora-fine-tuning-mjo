@@ -15,14 +15,11 @@ What this tests
 """
 
 import sys
-import types
 
 # ---------------------------------------------------------------------------
 # Minimal stubs so we can import src.model without a real checkpoint download.
 # We monkey-patch Aurora classes to skip checkpoint loading.
 # ---------------------------------------------------------------------------
-import torch
-import torch.nn as nn
 
 # We need aurora installed; the environment should have it.
 try:
@@ -41,11 +38,9 @@ Aurora.load_checkpoint = lambda self, strict=True: None  # type: ignore[method-a
 # ---------------------------------------------------------------------------
 sys.path.insert(0, ".")
 from src.model import (
-    AuroraMJO,
     _AURORA_DEFAULT_SURF_VARS,
-    _is_lora_param,
+    AuroraMJO,
     _log_param_counts,
-    freeze_backbone,
     load_model,
 )
 
@@ -82,12 +77,8 @@ def run_smoke_test() -> None:
     # ------------------------------------------------------------------
     # Assertion 1: Backbone has at least some frozen params.
     # ------------------------------------------------------------------
-    backbone_frozen = [
-        p for p in backbone.parameters() if not p.requires_grad
-    ]
-    assert backbone_frozen, (
-        "FAIL: no frozen parameters found in backbone — freeze_backbone() may not have run."
-    )
+    backbone_frozen = [p for p in backbone.parameters() if not p.requires_grad]
+    assert backbone_frozen, "FAIL: no frozen parameters found in backbone — freeze_backbone() may not have run."
     print(f"PASS [1] backbone has {len(backbone_frozen)} frozen parameter tensors.")
 
     # ------------------------------------------------------------------
@@ -114,14 +105,16 @@ def run_smoke_test() -> None:
     # Assertion 3: New variable embeddings (ttr, tcwv) are trainable.
     # ------------------------------------------------------------------
     surf_embed = backbone.encoder.surf_token_embeds
-    injected = [v for v in CONFIG["surface_variables"] if v not in _AURORA_DEFAULT_SURF_VARS]
+    injected = [
+        v for v in CONFIG["surface_variables"] if v not in _AURORA_DEFAULT_SURF_VARS
+    ]
     for var in injected:
-        assert var in surf_embed.weights, (
-            f"FAIL: '{var}' not in surf_token_embeds.weights — was it passed to Aurora?"
-        )
-        assert surf_embed.weights[var].requires_grad, (
-            f"FAIL: embedding for '{var}' is FROZEN. It should be trainable (randomly initialized)."
-        )
+        assert (
+            var in surf_embed.weights
+        ), f"FAIL: '{var}' not in surf_token_embeds.weights — was it passed to Aurora?"
+        assert surf_embed.weights[
+            var
+        ].requires_grad, f"FAIL: embedding for '{var}' is FROZEN. It should be trainable (randomly initialized)."
     print(f"PASS [3] injected variable embeddings {injected} are trainable.")
 
     # ------------------------------------------------------------------
@@ -129,20 +122,22 @@ def run_smoke_test() -> None:
     # ------------------------------------------------------------------
     for var in _AURORA_DEFAULT_SURF_VARS:
         if var in surf_embed.weights:
-            assert not surf_embed.weights[var].requires_grad, (
-                f"FAIL: pretrained embedding for '{var}' should be FROZEN but is trainable."
-            )
-    print(f"PASS [4] pretrained surface embeddings are frozen.")
+            assert not surf_embed.weights[
+                var
+            ].requires_grad, f"FAIL: pretrained embedding for '{var}' should be FROZEN but is trainable."
+    print("PASS [4] pretrained surface embeddings are frozen.")
 
     # ------------------------------------------------------------------
     # Assertion 5: MJO head is fully trainable.
     # ------------------------------------------------------------------
-    assert mjo_head is not None, "FAIL: MJO head is None — check config['mjo_head']['enabled']."
+    assert (
+        mjo_head is not None
+    ), "FAIL: MJO head is None — check config['mjo_head']['enabled']."
     head_params = list(mjo_head.parameters())
     assert head_params, "FAIL: MJO head has no parameters."
-    assert all(p.requires_grad for p in head_params), (
-        "FAIL: at least one MJO head parameter is FROZEN."
-    )
+    assert all(
+        p.requires_grad for p in head_params
+    ), "FAIL: at least one MJO head parameter is FROZEN."
     print(f"PASS [5] MJO head has {len(head_params)} param tensors, all trainable.")
 
     # ------------------------------------------------------------------
@@ -152,7 +147,9 @@ def run_smoke_test() -> None:
     _log_param_counts(model, label="AuroraMJO (smoke test)")
 
     trainable_total = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    assert trainable_total > 0, "FAIL: zero trainable parameters — optimizer would do nothing."
+    assert (
+        trainable_total > 0
+    ), "FAIL: zero trainable parameters — optimizer would do nothing."
     print(f"PASS [6] {trainable_total:,} trainable parameters in total.\n")
 
     print("All assertions passed. Freezing logic is correct.")

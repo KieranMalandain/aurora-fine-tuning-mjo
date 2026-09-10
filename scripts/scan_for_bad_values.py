@@ -22,32 +22,49 @@ import numpy as np
 import xarray as xr
 
 SURFACE_VAR_MAP = {
-    '2t':   ('Step02/ERA5.remap_180x360MODIS_6hrInst/T2',          '*', 't2'),
-    '10u':  ('Step02/ERA5.remap_180x360MODIS_6hrInst/U10',         '*', 'u10'),
-    '10v':  ('Step02/ERA5.remap_180x360MODIS_6hrInst/V10',         '*', 'v10'),
-    'msl':  ('Step02/ERA5.remap_180x360MODIS_6hrInst/PS',          '*', 'ps'),
-    'ttr':  ('Step03/ERA5.remap_180x360MODIS_6hrInst/meanTNLWFLX', '*', 'mtnlwrf'),
-    'tcwv': ('Step02/ERA5.remap_180x360MODIS_6hrInst/tcwv',        '*', 'tcwv'),
+    "2t": ("Step02/ERA5.remap_180x360MODIS_6hrInst/T2", "*", "t2"),
+    "10u": ("Step02/ERA5.remap_180x360MODIS_6hrInst/U10", "*", "u10"),
+    "10v": ("Step02/ERA5.remap_180x360MODIS_6hrInst/V10", "*", "v10"),
+    "msl": ("Step02/ERA5.remap_180x360MODIS_6hrInst/PS", "*", "ps"),
+    "ttr": ("Step03/ERA5.remap_180x360MODIS_6hrInst/meanTNLWFLX", "*", "mtnlwrf"),
+    "tcwv": ("Step02/ERA5.remap_180x360MODIS_6hrInst/tcwv", "*", "tcwv"),
 }
 ATMOS_VAR_MAP = {
-    'z': ('Step01/ERA5.remap_180x360MODIS_6hrInst/gopt', '*', 'z'),
-    'q': ('Step01/ERA5.remap_180x360MODIS_6hrInst/sphu', '*', 'q'),
-    't': ('Step01/ERA5.remap_180x360MODIS_6hrInst/tprt', '*', 't'),
-    'u': ('Step01/ERA5.remap_180x360MODIS_6hrInst/uWnd', '*', 'u'),
-    'v': ('Step01/ERA5.remap_180x360MODIS_6hrInst/vWnd', '*', 'v'),
+    "z": ("Step01/ERA5.remap_180x360MODIS_6hrInst/gopt", "*", "z"),
+    "q": ("Step01/ERA5.remap_180x360MODIS_6hrInst/sphu", "*", "q"),
+    "t": ("Step01/ERA5.remap_180x360MODIS_6hrInst/tprt", "*", "t"),
+    "u": ("Step01/ERA5.remap_180x360MODIS_6hrInst/uWnd", "*", "u"),
+    "v": ("Step01/ERA5.remap_180x360MODIS_6hrInst/vWnd", "*", "v"),
 }
 
 # A generous physical sanity bound per variable, in native units, well
 # outside any real value but well inside float32/bf16 overflow territory.
 # Anything beyond this is almost certainly a fill/sentinel value, not physics.
 SANE_ABS_MAX = {
-    '2t': 400, '10u': 200, '10v': 200, 'msl': 200000, 'ttr': 2000, 'tcwv': 500,
-    'z': 1e6, 'q': 1.0, 't': 400, 'u': 300, 'v': 300,
+    "2t": 400,
+    "10u": 200,
+    "10v": 200,
+    "msl": 200000,
+    "ttr": 2000,
+    "tcwv": 500,
+    "z": 1e6,
+    "q": 1.0,
+    "t": 400,
+    "u": 300,
+    "v": 300,
 }
 
 
-def scan_var(root: Path, name: str, step_subdir: str, glob_pattern: str,
-             native_name: str, start_year: int, end_year: int, n_files: int):
+def scan_var(
+    root: Path,
+    name: str,
+    step_subdir: str,
+    glob_pattern: str,
+    native_name: str,
+    start_year: int,
+    end_year: int,
+    n_files: int,
+):
     var_dir = root / step_subdir
     files = []
     for year in range(start_year, end_year + 1):
@@ -73,8 +90,10 @@ def scan_var(root: Path, name: str, step_subdir: str, glob_pattern: str,
         try:
             with xr.open_dataset(str(f), engine="netcdf4") as ds:
                 if native_name not in ds:
-                    print(f"  {name:6s}: variable '{native_name}' not found in {f.name}, "
-                          f"available: {list(ds.data_vars)[:5]}")
+                    print(
+                        f"  {name:6s}: variable '{native_name}' not found in {f.name}, "
+                        f"available: {list(ds.data_vars)[:5]}"
+                    )
                     continue
                 arr = ds[native_name].values.astype(np.float64)
         except Exception as e:
@@ -91,8 +110,10 @@ def scan_var(root: Path, name: str, step_subdir: str, glob_pattern: str,
             vmax = max(vmax, finite.max())
 
     flag = " <<< LOOK HERE" if (n_nan or n_inf or n_extreme) else ""
-    print(f"  {name:6s}: n={total:>10} | nan={n_nan:>6} | inf={n_inf:>6} | "
-          f"|x|>{bound:g}: {n_extreme:>6} | range=[{vmin:.4g}, {vmax:.4g}]{flag}")
+    print(
+        f"  {name:6s}: n={total:>10} | nan={n_nan:>6} | inf={n_inf:>6} | "
+        f"|x|>{bound:g}: {n_extreme:>6} | range=[{vmin:.4g}, {vmax:.4g}]{flag}"
+    )
 
 
 def main():
@@ -105,16 +126,36 @@ def main():
     root = Path(args.root)
     start_year, end_year = args.years
 
-    print(f"Scanning {args.n_files_per_var} file(s)/variable, years {start_year}-{end_year}")
+    print(
+        f"Scanning {args.n_files_per_var} file(s)/variable, years {start_year}-{end_year}"
+    )
     print(f"Root: {root}\n")
 
     print("Surface variables:")
     for name, (subdir, glob_pat, native) in SURFACE_VAR_MAP.items():
-        scan_var(root, name, subdir, glob_pat, native, start_year, end_year, args.n_files_per_var)
+        scan_var(
+            root,
+            name,
+            subdir,
+            glob_pat,
+            native,
+            start_year,
+            end_year,
+            args.n_files_per_var,
+        )
 
     print("\nAtmospheric variables:")
     for name, (subdir, glob_pat, native) in ATMOS_VAR_MAP.items():
-        scan_var(root, name, subdir, glob_pat, native, start_year, end_year, args.n_files_per_var)
+        scan_var(
+            root,
+            name,
+            subdir,
+            glob_pat,
+            native,
+            start_year,
+            end_year,
+            args.n_files_per_var,
+        )
 
 
 if __name__ == "__main__":

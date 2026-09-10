@@ -71,12 +71,23 @@ if "NERSC_HOST" in os.environ:
     os.environ.setdefault("HF_HUB_DISABLE_FILE_LOCKS", "1")
     try:
         import filelock
+
         class DummyLock:
-            def __init__(self, *args, **kwargs): pass
-            def acquire(self, *args, **kwargs): return self
-            def release(self, *args, **kwargs): pass
-            def __enter__(self): return self
-            def __exit__(self, *args, **kwargs): pass
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def acquire(self, *args, **kwargs):
+                return self
+
+            def release(self, *args, **kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args, **kwargs):
+                pass
+
         filelock.FileLock = DummyLock
     except ImportError:
         pass
@@ -99,6 +110,7 @@ def _deep_merge(base: dict, overlay: dict) -> dict:
     importing train.py (which imports torch unconditionally at module
     level) just to read `training.epochs` / `max_steps_per_epoch`."""
     from copy import deepcopy
+
     out = deepcopy(base)
     for k, v in (overlay or {}).items():
         if isinstance(v, dict) and isinstance(out.get(k), dict):
@@ -111,6 +123,7 @@ def _deep_merge(base: dict, overlay: dict) -> dict:
 def load_config(path: str, mode: str) -> dict:
     """Same semantics as train.py::load_config (mode overlay applied)."""
     import yaml
+
     with open(path) as f:
         raw = yaml.safe_load(f)
     if "modes" in raw:
@@ -127,9 +140,10 @@ def make_synth_batch(surf_vars, atmos_vars, device, H=720, W=1440, L=13):
     """Real-resolution synthetic Batch. Values are ~N(0,1) — a reasonable
     proxy for *normalized* inputs; this probe is about memory/throughput,
     not numerical correctness (that's what Task A4's smoke test verifies)."""
+    from datetime import datetime
+
     import torch
     from aurora import Batch, Metadata
-    from datetime import datetime
 
     surf = {k: torch.randn(1, 2, H, W, device=device) for k in surf_vars}
     atmos = {k: torch.randn(1, 2, L, H, W, device=device) for k in atmos_vars}
@@ -146,16 +160,18 @@ def make_synth_batch(surf_vars, atmos_vars, device, H=720, W=1440, L=13):
 
 def run_probe(size: str, cfg: dict, steps: int, warmup: int) -> dict:
     import torch
-    import torch.nn as nn
+    from torch import nn
 
     if not torch.cuda.is_available():
         print("No CUDA available — this probe must run on a GPU node.")
         sys.exit(2)
     device = torch.device("cuda")
     torch.cuda.reset_peak_memory_stats()
-    print(f"[env] torch={torch.__version__} cuda={torch.version.cuda} "
-          f"dev={torch.cuda.get_device_name(0)} "
-          f"alloc_conf={os.environ.get('PYTORCH_CUDA_ALLOC_CONF', '<unset>')}")
+    print(
+        f"[env] torch={torch.__version__} cuda={torch.version.cuda} "
+        f"dev={torch.cuda.get_device_name(0)} "
+        f"alloc_conf={os.environ.get('PYTORCH_CUDA_ALLOC_CONF', '<unset>')}"
+    )
 
     model_cfg = dict(cfg.get("model", {}))
     model_cfg["model_type"] = size  # "huge" -> full Aurora, else -> small
@@ -163,14 +179,16 @@ def run_probe(size: str, cfg: dict, steps: int, warmup: int) -> dict:
         # Gameplan explicitly says not to enable this casually (known IMA,
         # handoff §2 / repro_ima_matrix.py). Force it off for the probe
         # regardless of what's in the config, and say so loudly.
-        print("[probe] WARNING: gradient_checkpointing=true in config — "
-              "forcing OFF for this probe (known IMA risk; see FIX 5 / "
-              "tools/repro_ima_matrix.py). Re-enable only after that "
-              "matrix finds a crash-free configuration.")
+        print(
+            "[probe] WARNING: gradient_checkpointing=true in config — "
+            "forcing OFF for this probe (known IMA risk; see FIX 5 / "
+            "tools/repro_ima_matrix.py). Re-enable only after that "
+            "matrix finds a crash-free configuration."
+        )
         model_cfg["gradient_checkpointing"] = False
 
-    from src.model import load_model
     from src.loss import TropicalWeightedL1Loss
+    from src.model import load_model
 
     norm_stats = model_cfg.get("norm_stats") or None
     print(f"\n=== Loading model_type={size!r} via the real load_model() path ===")
@@ -184,14 +202,20 @@ def run_probe(size: str, cfg: dict, steps: int, warmup: int) -> dict:
     params = [p for p in model.parameters() if p.requires_grad]
     n_trainable = sum(p.numel() for p in params)
     if not params:
-        print("[probe] WARNING: zero trainable parameters — optimizer.step() "
-              "will be a no-op. Check freeze_backbone/use_lora config.")
-    optimizer = torch.optim.AdamW(
-        params,
-        lr=float(opt_cfg.get("lr", 1e-4)),
-        weight_decay=float(opt_cfg.get("weight_decay", 1e-5)),
-        betas=tuple(opt_cfg.get("betas", [0.9, 0.999])),
-    ) if params else None
+        print(
+            "[probe] WARNING: zero trainable parameters — optimizer.step() "
+            "will be a no-op. Check freeze_backbone/use_lora config."
+        )
+    optimizer = (
+        torch.optim.AdamW(
+            params,
+            lr=float(opt_cfg.get("lr", 1e-4)),
+            weight_decay=float(opt_cfg.get("weight_decay", 1e-5)),
+            betas=tuple(opt_cfg.get("betas", [0.9, 0.999])),
+        )
+        if params
+        else None
+    )
 
     use_amp = bool(train_cfg.get("use_amp", True))
     amp_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
@@ -207,11 +231,15 @@ def run_probe(size: str, cfg: dict, steps: int, warmup: int) -> dict:
     ).to(device)
 
     batch = make_synth_batch(surf_vars, atmos_vars, device)
-    target = {**{k: torch.randn(1, 720, 1440, device=device) for k in surf_vars},
-              **{k: torch.randn(1, 13, 720, 1440, device=device) for k in atmos_vars}}
+    target = {
+        **{k: torch.randn(1, 720, 1440, device=device) for k in surf_vars},
+        **{k: torch.randn(1, 13, 720, 1440, device=device) for k in atmos_vars},
+    }
 
-    print(f"[probe] trainable params: {n_trainable:,} | use_amp={use_amp} "
-          f"dtype={amp_dtype} | steps={steps} (warmup={warmup})")
+    print(
+        f"[probe] trainable params: {n_trainable:,} | use_amp={use_amp} "
+        f"dtype={amp_dtype} | steps={steps} (warmup={warmup})"
+    )
 
     step_times = []
     nonfinite_grad_skips = 0
@@ -222,7 +250,7 @@ def run_probe(size: str, cfg: dict, steps: int, warmup: int) -> dict:
             t0 = time.time()
             if optimizer is not None:
                 optimizer.zero_grad(set_to_none=True)
-            with torch.amp.autocast('cuda', enabled=use_amp, dtype=amp_dtype):
+            with torch.amp.autocast("cuda", enabled=use_amp, dtype=amp_dtype):
                 out = model(batch)
                 pred = out[0] if isinstance(out, tuple) else out
                 losses = []
@@ -253,19 +281,26 @@ def run_probe(size: str, cfg: dict, steps: int, warmup: int) -> dict:
             if i >= warmup:
                 step_times.append(dt)
             peak_gib = torch.cuda.max_memory_allocated() / 2**30
-            print(f"  [step {i+1}/{steps}] loss={loss.item():.4f} "
-                  f"dt={dt*1000:.0f}ms peak_mem={peak_gib:.2f} GiB"
-                  + ("  (warmup)" if i < warmup else ""))
+            print(
+                f"  [step {i + 1}/{steps}] loss={loss.item():.4f} "
+                f"dt={dt * 1000:.0f}ms peak_mem={peak_gib:.2f} GiB"
+                + ("  (warmup)" if i < warmup else "")
+            )
     except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
         msg = str(e)
         if not ("out of memory" in msg.lower() or "cuda" in msg.lower()):
             raise  # not a memory-related failure — don't swallow real bugs
         peak_gib = torch.cuda.max_memory_allocated() / 2**30
-        print(f"\n[probe] OOM/CUDA failure at step {len(step_times) + warmup + 1}: "
-              f"{msg[:200]}\n[probe] peak memory before failure: {peak_gib:.2f} GiB")
+        print(
+            f"\n[probe] OOM/CUDA failure at step {len(step_times) + warmup + 1}: "
+            f"{msg[:200]}\n[probe] peak memory before failure: {peak_gib:.2f} GiB"
+        )
         result = {
-            "size": size, "status": "OOM", "peak_mem_gib": round(peak_gib, 2),
-            "steps_completed": len(step_times) + warmup, "n_trainable_params": n_trainable,
+            "size": size,
+            "status": "OOM",
+            "peak_mem_gib": round(peak_gib, 2),
+            "steps_completed": len(step_times) + warmup,
+            "n_trainable_params": n_trainable,
         }
         _save_result(result)
         return result
@@ -283,14 +318,18 @@ def run_probe(size: str, cfg: dict, steps: int, warmup: int) -> dict:
         "steps_completed": steps,
         "n_trainable_params": n_trainable,
         "nonfinite_grad_skips": nonfinite_grad_skips,
-        "total_gpu_gib": round(torch.cuda.get_device_properties(0).total_memory / 2**30, 1),
+        "total_gpu_gib": round(
+            torch.cuda.get_device_properties(0).total_memory / 2**30, 1
+        ),
     }
-    print(f"\n=== RESULT size={size!r}: peak_mem={peak_gib:.2f} GiB "
-          f"({result['total_gpu_gib']:.0f} GiB card) | "
-          f"mean_step={mean_step_s*1000:.0f}ms | "
-          f"trainable_params={n_trainable:,} | "
-          f"nonfinite_grad_skips={nonfinite_grad_skips} "
-          f"(elapsed {total_wall_s:.1f}s for {steps} steps) ===\n")
+    print(
+        f"\n=== RESULT size={size!r}: peak_mem={peak_gib:.2f} GiB "
+        f"({result['total_gpu_gib']:.0f} GiB card) | "
+        f"mean_step={mean_step_s * 1000:.0f}ms | "
+        f"trainable_params={n_trainable:,} | "
+        f"nonfinite_grad_skips={nonfinite_grad_skips} "
+        f"(elapsed {total_wall_s:.1f}s for {steps} steps) ===\n"
+    )
     _save_result(result)
     return result
 
@@ -338,64 +377,95 @@ def decide(cfg: dict, session_hours: float = 3.5):
     total_micro_steps = epochs * steps_per_epoch
     session_budget_s = session_hours * 3600
 
-    print(f"[decide] baseline plan: epochs={epochs} x steps/epoch={steps_per_epoch} "
-          f"= {total_micro_steps:,} micro-steps | session budget ~{session_hours}h "
-          f"({session_budget_s:.0f}s, leaves ~30min/4h margin for checkpointing/setup)\n")
+    print(
+        f"[decide] baseline plan: epochs={epochs} x steps/epoch={steps_per_epoch} "
+        f"= {total_micro_steps:,} micro-steps | session budget ~{session_hours}h "
+        f"({session_budget_s:.0f}s, leaves ~30min/4h margin for checkpointing/setup)\n"
+    )
 
     for r in (small, huge):
         if r.get("status") != "OK":
-            print(f"  {r['size']:>5}: status={r.get('status')} "
-                  f"(peak_mem={r.get('peak_mem_gib','?')} GiB before failure) "
-                  f"— DISQUALIFIED, does not fit.")
+            print(
+                f"  {r['size']:>5}: status={r.get('status')} "
+                f"(peak_mem={r.get('peak_mem_gib', '?')} GiB before failure) "
+                f"— DISQUALIFIED, does not fit."
+            )
             continue
         total_s = total_micro_steps * r["mean_step_s"]
         sessions = -(-total_s // session_budget_s)  # ceil
         headroom = 1.0 - r["peak_mem_gib"] / r["total_gpu_gib"]
         fits = headroom >= 0.10
-        print(f"  {r['size']:>5}: peak_mem={r['peak_mem_gib']:.1f}/{r['total_gpu_gib']:.0f} GiB "
-              f"({headroom*100:.0f}% headroom, {'FITS' if fits else 'TOO TIGHT'}) | "
-              f"mean_step={r['mean_step_s']*1000:.0f}ms -> "
-              f"~{total_s/3600:.1f}h total -> ~{int(sessions)} session(s) | "
-              f"trainable_params={r['n_trainable_params']:,}")
+        print(
+            f"  {r['size']:>5}: peak_mem={r['peak_mem_gib']:.1f}/{r['total_gpu_gib']:.0f} GiB "
+            f"({headroom * 100:.0f}% headroom, {'FITS' if fits else 'TOO TIGHT'}) | "
+            f"mean_step={r['mean_step_s'] * 1000:.0f}ms -> "
+            f"~{total_s / 3600:.1f}h total -> ~{int(sessions)} session(s) | "
+            f"trainable_params={r['n_trainable_params']:,}"
+        )
 
-    print("\n[decide] Recommendation (ratify or override — Part 4 item 1 is a "
-          "human decision):")
+    print(
+        "\n[decide] Recommendation (ratify or override — Part 4 item 1 is a "
+        "human decision):"
+    )
     if huge.get("status") == "OK":
         headroom = 1.0 - huge["peak_mem_gib"] / huge["total_gpu_gib"]
         total_s = total_micro_steps * huge["mean_step_s"]
         sessions = -(-total_s // session_budget_s)
         if headroom >= 0.10 and sessions <= 2:
-            print("  -> FULL ('huge'). Fits with headroom and finishes baseline "
-                  "in <=2 sessions. Full also has stabilise_level_agg=True by "
-                  "default (more NaN-resistant) — prefer it per §0.3.")
+            print(
+                "  -> FULL ('huge'). Fits with headroom and finishes baseline "
+                "in <=2 sessions. Full also has stabilise_level_agg=True by "
+                "default (more NaN-resistant) — prefer it per §0.3."
+            )
             return "huge"
-        print(f"  -> full does not clear the bar (headroom={headroom*100:.0f}%, "
-              f"~{int(sessions)} sessions needed) — falling back to SMALL, "
-              "the guaranteed-deliverable option.")
+        print(
+            f"  -> full does not clear the bar (headroom={headroom * 100:.0f}%, "
+            f"~{int(sessions)} sessions needed) — falling back to SMALL, "
+            "the guaranteed-deliverable option."
+        )
     else:
         print("  -> full OOM'd or wasn't run — falling back to SMALL.")
     return "small"
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--size", choices=["small", "huge"], default=None,
-                     help="Which model size to probe. Omit only when using --decide.")
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument(
+        "--size",
+        choices=["small", "huge"],
+        default=None,
+        help="Which model size to probe. Omit only when using --decide.",
+    )
     ap.add_argument("--config", default="configs/unified.yaml")
-    ap.add_argument("--mode", default="baseline",
-                     choices=["baseline", "physics_informed", "lora", "combined"])
+    ap.add_argument(
+        "--mode",
+        default="baseline",
+        choices=["baseline", "physics_informed", "lora", "combined"],
+    )
     ap.add_argument("--steps", type=int, default=30)
-    ap.add_argument("--warmup", type=int, default=3,
-                     help="Steps excluded from the mean-step-time average "
-                          "(cuDNN/attention-kernel autotuning), but still "
-                          "counted toward peak memory.")
-    ap.add_argument("--decide", action="store_true",
-                     help="Skip probing; combine tools/probe_results/{small,huge}.json "
-                          "into a recommendation.")
-    ap.add_argument("--session-hours", type=float, default=3.5,
-                     help="Effective training time per interactive session "
-                          "(4h alloc minus setup/checkpoint margin).")
+    ap.add_argument(
+        "--warmup",
+        type=int,
+        default=3,
+        help="Steps excluded from the mean-step-time average "
+        "(cuDNN/attention-kernel autotuning), but still "
+        "counted toward peak memory.",
+    )
+    ap.add_argument(
+        "--decide",
+        action="store_true",
+        help="Skip probing; combine tools/probe_results/{small,huge}.json "
+        "into a recommendation.",
+    )
+    ap.add_argument(
+        "--session-hours",
+        type=float,
+        default=3.5,
+        help="Effective training time per interactive session "
+        "(4h alloc minus setup/checkpoint margin).",
+    )
     args = ap.parse_args()
 
     cfg = load_config(args.config, args.mode)
