@@ -61,4 +61,29 @@ Key metrics include:
 
 ## Human Notes
 
-- **Target Environment:** We are migrating compute from Yale Bouchet to NERSC Perlmutter. Agents should assume NERSC paths (`/global/cfs/cdirs/...`) are the default for new code.
+- **Target Environment:** NERSC Perlmutter (1 node × 4 × A100 80GB). All training runs here under SLURM; input paths under `/global/cfs/cdirs/...` are read-only defaults.
+
+## Scientific Direction & Priorities (from GEMINI.md)
+
+*Imported from GEMINI.md during task A4 to preserve original scientific priorities and guidelines.*
+
+### What to optimize for
+- Clean, reproducible experiment structure
+- Correct RMM evaluation pipeline
+- Time-split validation
+- Minimal training/evaluation leakage
+- Clear experiment configs and logs
+
+### What to avoid
+- Do not optimize only visual sharpness of OLR fields
+- Do not introduce physics-informed losses before the baseline is stable
+- Do not add speculative architecture changes without a measurable evaluation target
+- Do not use random train/val splits
+- Do not break remote training scripts casually
+
+### Required outputs for substantive work
+- Updated code
+- Updated experiment config(s)
+- Updated documentation in `docs/`
+- Exact commands to run
+- Risks / assumptions
