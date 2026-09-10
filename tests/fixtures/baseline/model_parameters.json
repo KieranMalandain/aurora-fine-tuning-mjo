@@ -1,0 +1,46 @@
+{
+  "baseline": {
+    "device": "cpu",
+    "frozen_params": 112789376,
+    "lora_constructed": false,
+    "mjo_head_constructed": false,
+    "mjo_head_params": 0,
+    "mjo_head_trainable": 0,
+    "model_type": "small",
+    "total_params": 112830384,
+    "trainable_params": 41008
+  },
+  "combined": {
+    "device": "cpu",
+    "frozen_params": 112789376,
+    "lora_constructed": true,
+    "mjo_head_constructed": false,
+    "mjo_head_params": 0,
+    "mjo_head_trainable": 0,
+    "model_type": "small",
+    "total_params": 113371056,
+    "trainable_params": 581680
+  },
+  "lora": {
+    "device": "cpu",
+    "frozen_params": 112789376,
+    "lora_constructed": true,
+    "mjo_head_constructed": false,
+    "mjo_head_params": 0,
+    "mjo_head_trainable": 0,
+    "model_type": "small",
+    "total_params": 113371056,
+    "trainable_params": 581680
+  },
+  "physics_informed": {
+    "device": "cpu",
+    "frozen_params": 112789376,
+    "lora_constructed": false,
+    "mjo_head_constructed": false,
+    "mjo_head_params": 0,
+    "mjo_head_trainable": 0,
+    "model_type": "small",
+    "total_params": 112830384,
+    "trainable_params": 41008
+  }
+}
