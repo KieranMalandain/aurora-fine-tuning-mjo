@@ -1,0 +1,136 @@
+{
+  "checkpointing": {
+    "keep_last_n": 3,
+    "plateau_rel_delta": 0.01,
+    "plateau_window": 200,
+    "save_dir": "checkpoints/lora",
+    "save_every_n_steps": 500
+  },
+  "data": {
+    "batch_size": 1,
+    "dummy": {
+      "pressure_files": [],
+      "static_file": "",
+      "surface_files": []
+    },
+    "num_workers": 4,
+    "pin_memory": true,
+    "prefetch_factor": 4,
+    "real": {
+      "test_years": [
+        2020,
+        2023
+      ],
+      "train_years": [
+        1980,
+        2015
+      ],
+      "val_years": [
+        2016,
+        2019
+      ]
+    },
+    "root": "/global/cfs/cdirs/m4946/xiaoming/zm4946.MachLearn/PrcsPrep/prcs.ERA5/prcs.ERA5.Remap/Results",
+    "slt_path": "/pscratch/sd/k/kam352/Aurora/slt/slt_data.nc",
+    "use_dummy": false
+  },
+  "experiment": {
+    "init_from": "latest:checkpoints/baseline",
+    "mode": "lora",
+    "name": "phase2_rollout_lora",
+    "seed": 42
+  },
+  "logging": {
+    "log_every_n_steps": 100,
+    "project": "aurora-mjo",
+    "use_wandb": false,
+    "val_every_n_epochs": 1
+  },
+  "loss": {
+    "grid": {
+      "enabled": true,
+      "extratropics_weight": 0.1,
+      "tropics_bbox": [
+        -20,
+        20
+      ],
+      "tropics_weight": 1.0
+    },
+    "mjo_head": {
+      "enabled": false,
+      "weight": 0.0
+    },
+    "moisture_budget": {
+      "enabled": false,
+      "weight": 0.0
+    },
+    "spectral": {
+      "enabled": false,
+      "weight": 0.0
+    }
+  },
+  "model": {
+    "gradient_checkpointing": false,
+    "lora_mode": "single",
+    "mjo_head": {
+      "enabled": false
+    },
+    "model_type": "small",
+    "norm_stats": {
+      "msl": {
+        "mean": 96667.9822,
+        "std": 9504.6359
+      },
+      "tcwv": {
+        "mean": 18.2967,
+        "std": 16.3265
+      },
+      "ttr": {
+        "mean": -226.0498,
+        "std": 49.2158
+      }
+    },
+    "surface_variables": [
+      "2t",
+      "10u",
+      "10v",
+      "msl",
+      "ttr",
+      "tcwv"
+    ],
+    "use_lora": true
+  },
+  "training": {
+    "epochs": 4,
+    "grad_accum_steps": 2,
+    "max_grad_norm": 1.0,
+    "max_steps_per_epoch": 2500,
+    "max_val_batches": 200,
+    "optimizer": {
+      "betas": [
+        0.9,
+        0.999
+      ],
+      "lr": 5e-05,
+      "name": "adamw",
+      "weight_decay": 1e-05
+    },
+    "rollout": {
+      "backprop": "detached",
+      "enabled": true,
+      "max_steps": 4,
+      "start_steps": 1,
+      "step_increase_every_n_epochs": 1,
+      "step_loss_weighting": "uniform"
+    },
+    "scheduler": {
+      "eta_min": 1e-06,
+      "name": "cosine",
+      "warmup_steps": 200
+    },
+    "sdpa_backend": "default",
+    "target_effective_batch": 8,
+    "time_limit_hours": 11.0,
+    "use_amp": true
+  }
+}

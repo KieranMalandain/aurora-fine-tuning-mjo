@@ -1,0 +1,32 @@
+{
+  "comparison_tolerance": {
+    "description": "Relative tolerance for comparing float loss trajectories in C4",
+    "observed_inter_run_delta": 0.0,
+    "recommended_relative_tolerance": 0.0001
+  },
+  "device": "cuda:0",
+  "grad_accum_steps": 8,
+  "metrics": {
+    "best_val_loss": 7421.9248046875,
+    "components": {
+      "grid": 7472.0244140625,
+      "mjo_head": 0.0,
+      "moisture_budget": 0.0,
+      "spectral": 0.0
+    },
+    "learning_rate": 1e-06,
+    "nan_skips": 0,
+    "nonfinite_grad_skips": 0,
+    "skip_step_ratio": 0.0,
+    "steps_completed": 1,
+    "train_losses": [
+      7472.0244140625
+    ],
+    "val_losses": [
+      7421.9248046875
+    ]
+  },
+  "mode": "baseline",
+  "model_type": "small",
+  "seed": 42
+}
