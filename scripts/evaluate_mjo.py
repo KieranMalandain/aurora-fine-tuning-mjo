@@ -57,7 +57,6 @@ Dependencies
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 import warnings
 from datetime import datetime, timedelta
@@ -71,35 +70,36 @@ import xarray as xr
 # Constants mirroring compute_rmm.py
 # ---------------------------------------------------------------------------
 
-VAL_YEARS  = list(range(2016, 2020))
+VAL_YEARS = list(range(2016, 2020))
 TEST_YEARS = list(range(2020, 2024))
 
 ACTIVE_MJO_THRESHOLD = 1.0  # amplitude > this → active MJO
-MAX_LEAD_DAYS = 30           # default evaluation horizon
-STEP_HRS = 6                 # Aurora step size in hours
+MAX_LEAD_DAYS = 30  # default evaluation horizon
+STEP_HRS = 6  # Aurora step size in hours
 STEPS_PER_DAY = 24 // STEP_HRS  # = 4
 
 LAT_S = -15.0  # tropical band for EOF projection fallback
-LAT_N =  15.0
+LAT_N = 15.0
 
 
 # ---------------------------------------------------------------------------
 # RMM utility functions
 # ---------------------------------------------------------------------------
 
+
 def load_basis(basis_path: Path) -> dict:
     """Load the frozen training-period RMM basis from rmm_basis.npz."""
     data = np.load(str(basis_path))
     return {
-        "eof1":         data["eof1"],           # (3,)
-        "eof2":         data["eof2"],           # (3,)
-        "olr_clim":     data["olr_clim"],       # (366,)
-        "u850_clim":    data["u850_clim"],
-        "u200_clim":    data["u200_clim"],
-        "olr_std":      float(data["olr_std"][0]),
-        "u850_std":     float(data["u850_std"][0]),
-        "u200_std":     float(data["u200_std"][0]),
-        "doy":          data["clim_dayofyear"], # (366,) DOY labels
+        "eof1": data["eof1"],  # (3,)
+        "eof2": data["eof2"],  # (3,)
+        "olr_clim": data["olr_clim"],  # (366,)
+        "u850_clim": data["u850_clim"],
+        "u200_clim": data["u200_clim"],
+        "olr_std": float(data["olr_std"][0]),
+        "u850_std": float(data["u850_std"][0]),
+        "u200_std": float(data["u200_std"][0]),
+        "doy": data["clim_dayofyear"],  # (366,) DOY labels
     }
 
 
@@ -141,7 +141,7 @@ def project_fields_to_rmm(
     idx = np.searchsorted(doy_arr, doy)
     idx = np.clip(idx, 0, len(doy_arr) - 1)
 
-    olr_anom  = (olr_trop  - basis["olr_clim"][idx])  / (basis["olr_std"]  + 1e-8)
+    olr_anom = (olr_trop - basis["olr_clim"][idx]) / (basis["olr_std"] + 1e-8)
     u850_anom = (u850_trop - basis["u850_clim"][idx]) / (basis["u850_std"] + 1e-8)
     u200_anom = (u200_trop - basis["u200_clim"][idx]) / (basis["u200_std"] + 1e-8)
 
@@ -155,8 +155,10 @@ def project_fields_to_rmm(
 # Metric functions
 # ---------------------------------------------------------------------------
 
-def bivariate_acc(rmm1_fc: np.ndarray, rmm2_fc: np.ndarray,
-                  rmm1_ob: np.ndarray, rmm2_ob: np.ndarray) -> float:
+
+def bivariate_acc(
+    rmm1_fc: np.ndarray, rmm2_fc: np.ndarray, rmm1_ob: np.ndarray, rmm2_ob: np.ndarray
+) -> float:
     """
     Bivariate Anomaly Correlation Coefficient (Wheeler & Hendon 2004).
 
@@ -170,8 +172,8 @@ def bivariate_acc(rmm1_fc: np.ndarray, rmm2_fc: np.ndarray,
     if n < 2:
         return np.nan
     cov = np.sum(rmm1_fc * rmm1_ob + rmm2_fc * rmm2_ob)
-    var_fc = np.sum(rmm1_fc ** 2 + rmm2_fc ** 2)
-    var_ob = np.sum(rmm1_ob ** 2 + rmm2_ob ** 2)
+    var_fc = np.sum(rmm1_fc**2 + rmm2_fc**2)
+    var_ob = np.sum(rmm1_ob**2 + rmm2_ob**2)
     denom = np.sqrt(var_fc * var_ob)
     if denom < 1e-12:
         return np.nan
@@ -192,8 +194,9 @@ def amplitude_error(amp_fc: np.ndarray, amp_ob: np.ndarray) -> float:
     return float(np.mean(amp_fc - amp_ob))
 
 
-def phase_error_deg(rmm1_fc: np.ndarray, rmm2_fc: np.ndarray,
-                    rmm1_ob: np.ndarray, rmm2_ob: np.ndarray) -> float:
+def phase_error_deg(
+    rmm1_fc: np.ndarray, rmm2_fc: np.ndarray, rmm1_ob: np.ndarray, rmm2_ob: np.ndarray
+) -> float:
     """
     Mean absolute phase error in degrees.
 
@@ -214,19 +217,20 @@ def phase_error_deg(rmm1_fc: np.ndarray, rmm2_fc: np.ndarray,
 # Model-agnostic RMM extraction from a rollout
 # ---------------------------------------------------------------------------
 
+
 def extract_rmm_from_mjo_head(
-    mjo_pred: "torch.Tensor",  # (B, 3)
+    mjo_pred: torch.Tensor,  # (B, 3)
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Extract RMM1, RMM2, Amplitude from MJO head output tensor."""
     arr = mjo_pred.detach().cpu().numpy()  # (B, 3)
     rmm1 = arr[:, 0]
     rmm2 = arr[:, 1]
-    amp  = np.sqrt(rmm1 ** 2 + rmm2 ** 2)
+    amp = np.sqrt(rmm1**2 + rmm2**2)
     return rmm1, rmm2, amp
 
 
 def extract_rmm_from_fields(
-    pred_batch: "aurora.batch.Batch",
+    pred_batch: aurora.batch.Batch,
     valid_time: datetime,
     basis: dict,
     lat_name: str = "lat",
@@ -246,11 +250,10 @@ def extract_rmm_from_fields(
     pred_batch.metadata.lon : Tensor(W,)
     pred_batch.metadata.atmos_levels : tuple of pressure levels in hPa
     """
-    import torch
 
-    surf  = pred_batch.surf_vars
+    surf = pred_batch.surf_vars
     atmos = pred_batch.atmos_vars
-    meta  = pred_batch.metadata
+    meta = pred_batch.metadata
 
     # --- OLR fallback variable names (mtnlwrf or ttr) ---
     olr_key = None
@@ -263,7 +266,7 @@ def extract_rmm_from_fields(
     if olr_key is None or not has_u:
         return None, None, None
 
-    lat = meta.lat.cpu().numpy()   # (H,)
+    lat = meta.lat.cpu().numpy()  # (H,)
     levels = np.array(meta.atmos_levels)
 
     # Tropical mask
@@ -293,7 +296,7 @@ def extract_rmm_from_fields(
         t_trop = t_lev[trop, :]
         return float((t_trop * weights[:, None]).sum(axis=0).mean())
 
-    olr_val  = _trop_mean_surf(olr_key)
+    olr_val = _trop_mean_surf(olr_key)
     u850_val = _trop_mean_pressure("u", 850)
     u200_val = _trop_mean_pressure("u", 200)
 
@@ -302,13 +305,14 @@ def extract_rmm_from_fields(
 
     doy = valid_time.timetuple().tm_yday
     rmm1, rmm2 = project_fields_to_rmm(olr_val, u850_val, u200_val, doy, basis)
-    amp = float(np.sqrt(rmm1 ** 2 + rmm2 ** 2))
+    amp = float(np.sqrt(rmm1**2 + rmm2**2))
     return rmm1, rmm2, amp
 
 
 # ---------------------------------------------------------------------------
 # Core evaluation loop
 # ---------------------------------------------------------------------------
+
 
 def _advance_time(t: datetime, n_steps: int, step_hrs: int = STEP_HRS) -> datetime:
     return t + timedelta(hours=n_steps * step_hrs)
@@ -360,11 +364,11 @@ def run_evaluation(
     targets_time = pd.DatetimeIndex(targets_ds.time.values)
     targets_rmm1 = targets_ds["rmm1"].values
     targets_rmm2 = targets_ds["rmm2"].values
-    targets_amp  = targets_ds["amplitude"].values
+    targets_amp = targets_ds["amplitude"].values
 
     max_steps = max_lead_days * STEPS_PER_DAY
 
-    has_head = (hasattr(model, "mjo_head") and model.mjo_head is not None)
+    has_head = hasattr(model, "mjo_head") and model.mjo_head is not None
 
     # Per-lead-day storage: list of (rmm1_fc, rmm2_fc, rmm1_ob, rmm2_ob)
     by_lead: dict[int, dict] = {
@@ -446,7 +450,7 @@ def run_evaluation(
                 # the new input.  We update time in metadata and keep rolling.
                 try:
                     import dataclasses
-                    from aurora.batch import Metadata
+
                     next_metadata = dataclasses.replace(
                         current_batch.metadata,
                         time=(valid_time,),
@@ -491,8 +495,10 @@ def run_evaluation(
                 by_lead[day]["rmm2_ob"].append(r2_ob)
 
                 ic_record["leads"][day] = {
-                    "rmm1_fc": r1_fc, "rmm2_fc": r2_fc,
-                    "rmm1_ob": r1_ob, "rmm2_ob": r2_ob,
+                    "rmm1_fc": r1_fc,
+                    "rmm2_fc": r2_fc,
+                    "rmm1_ob": r1_ob,
+                    "rmm2_ob": r2_ob,
                 }
             records.append(ic_record)
 
@@ -502,8 +508,15 @@ def run_evaluation(
     # ------------------------------------------------------------------
     # Aggregate metrics by lead day
     # ------------------------------------------------------------------
-    leads_out, acc_out, rmse1_out, rmse2_out, amp_err_out, phase_err_out, n_cases_out = \
-        [], [], [], [], [], [], []
+    (
+        leads_out,
+        acc_out,
+        rmse1_out,
+        rmse2_out,
+        amp_err_out,
+        phase_err_out,
+        n_cases_out,
+    ) = [], [], [], [], [], [], []
 
     for day in range(1, max_lead_days + 1):
         d = by_lead[day]
@@ -516,21 +529,21 @@ def run_evaluation(
         acc_out.append(bivariate_acc(r1_fc, r2_fc, r1_ob, r2_ob))
         rmse1_out.append(rmse_pair(r1_fc, r1_ob))
         rmse2_out.append(rmse_pair(r2_fc, r2_ob))
-        amp_fc_arr = np.sqrt(r1_fc ** 2 + r2_fc ** 2)
-        amp_ob_arr = np.sqrt(r1_ob ** 2 + r2_ob ** 2)
+        amp_fc_arr = np.sqrt(r1_fc**2 + r2_fc**2)
+        amp_ob_arr = np.sqrt(r1_ob**2 + r2_ob**2)
         amp_err_out.append(amplitude_error(amp_fc_arr, amp_ob_arr))
         phase_err_out.append(phase_error_deg(r1_fc, r2_fc, r1_ob, r2_ob))
         n_cases_out.append(len(r1_fc))
 
     return {
-        "leads":     leads_out,
-        "acc":       acc_out,
+        "leads": leads_out,
+        "acc": acc_out,
         "rmse_rmm1": rmse1_out,
         "rmse_rmm2": rmse2_out,
-        "amp_err":   amp_err_out,
+        "amp_err": amp_err_out,
         "phase_err": phase_err_out,
-        "n_cases":   n_cases_out,
-        "records":   records,
+        "n_cases": n_cases_out,
+        "records": records,
     }
 
 
@@ -538,24 +551,28 @@ def run_evaluation(
 # Output helpers: table + plots
 # ---------------------------------------------------------------------------
 
+
 def save_summary_csv(results: dict, out_dir: Path) -> Path:
     """Write per-lead-day skill metrics to a CSV."""
-    df = pd.DataFrame({
-        "lead_day":  results["leads"],
-        "acc":       results["acc"],
-        "rmse_rmm1": results["rmse_rmm1"],
-        "rmse_rmm2": results["rmse_rmm2"],
-        "amp_err":   results["amp_err"],
-        "phase_err": results["phase_err"],
-        "n_cases":   results["n_cases"],
-    })
+    df = pd.DataFrame(
+        {
+            "lead_day": results["leads"],
+            "acc": results["acc"],
+            "rmse_rmm1": results["rmse_rmm1"],
+            "rmse_rmm2": results["rmse_rmm2"],
+            "amp_err": results["amp_err"],
+            "phase_err": results["phase_err"],
+            "n_cases": results["n_cases"],
+        }
+    )
     csv_path = out_dir / "mjo_skill_by_lead.csv"
     df.to_csv(str(csv_path), index=False, float_format="%.4f")
     return csv_path
 
 
-def save_skill_plots(results: dict, out_dir: Path,
-                     label: str = "", active_results: dict | None = None) -> None:
+def save_skill_plots(
+    results: dict, out_dir: Path, label: str = "", active_results: dict | None = None
+) -> None:
     """
     Generate and save skill-vs-lead-day plots.
 
@@ -566,6 +583,7 @@ def save_skill_plots(results: dict, out_dir: Path,
     """
     try:
         import matplotlib
+
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
     except ImportError:
@@ -576,11 +594,21 @@ def save_skill_plots(results: dict, out_dir: Path,
 
     # ---- 1. Bivariate ACC ----
     fig, ax = plt.subplots(figsize=(8, 5))
-    ax.plot(leads, results["acc"], "b-o", markersize=4,
-            label=f"All cases{' – ' + label if label else ''}")
+    ax.plot(
+        leads,
+        results["acc"],
+        "b-o",
+        markersize=4,
+        label=f"All cases{' – ' + label if label else ''}",
+    )
     if active_results is not None:
-        ax.plot(active_results["leads"], active_results["acc"],
-                "r--s", markersize=4, label="Active MJO only (amp₀>1)")
+        ax.plot(
+            active_results["leads"],
+            active_results["acc"],
+            "r--s",
+            markersize=4,
+            label="Active MJO only (amp₀>1)",
+        )
     ax.axhline(0.5, color="gray", linestyle="--", linewidth=0.8, label="ACC=0.5")
     ax.set_xlabel("Lead time (days)")
     ax.set_ylabel("Bivariate RMM ACC")
@@ -597,8 +625,13 @@ def save_skill_plots(results: dict, out_dir: Path,
     fig, ax = plt.subplots(figsize=(8, 5))
     ax.plot(leads, results["rmse_rmm1"], "b-o", markersize=4, label="RMSE RMM1")
     ax.plot(leads, results["rmse_rmm2"], "g-^", markersize=4, label="RMSE RMM2")
-    ax.axhline(np.sqrt(2), color="gray", linestyle="--", linewidth=0.8,
-               label=r"√2 (climatological limit)")
+    ax.axhline(
+        np.sqrt(2),
+        color="gray",
+        linestyle="--",
+        linewidth=0.8,
+        label=r"√2 (climatological limit)",
+    )
     ax.set_xlabel("Lead time (days)")
     ax.set_ylabel("RMSE (dimensionless)")
     ax.set_title("RMM1 & RMM2 RMSE vs Lead Time")
@@ -643,17 +676,17 @@ def print_skill_table(results: dict, active_results: dict | None = None) -> None
     print("-" * len(header))
 
     for i, day in enumerate(results["leads"]):
-        acc  = results["acc"][i]
-        r1   = results["rmse_rmm1"][i]
-        r2   = results["rmse_rmm2"][i]
-        ae   = results["amp_err"][i]
-        pe   = results["phase_err"][i]
-        n    = results["n_cases"][i]
-        acc_s  = f"{acc:.3f}"  if not np.isnan(acc)  else "  NaN"
-        r1_s   = f"{r1:.3f}"   if not np.isnan(r1)   else "  NaN"
-        r2_s   = f"{r2:.3f}"   if not np.isnan(r2)   else "  NaN"
-        ae_s   = f"{ae:+.3f}"  if not np.isnan(ae)   else "   NaN"
-        pe_s   = f"{pe:.1f}°"  if not np.isnan(pe)   else "    NaN"
+        acc = results["acc"][i]
+        r1 = results["rmse_rmm1"][i]
+        r2 = results["rmse_rmm2"][i]
+        ae = results["amp_err"][i]
+        pe = results["phase_err"][i]
+        n = results["n_cases"][i]
+        acc_s = f"{acc:.3f}" if not np.isnan(acc) else "  NaN"
+        r1_s = f"{r1:.3f}" if not np.isnan(r1) else "  NaN"
+        r2_s = f"{r2:.3f}" if not np.isnan(r2) else "  NaN"
+        ae_s = f"{ae:+.3f}" if not np.isnan(ae) else "   NaN"
+        pe_s = f"{pe:.1f}°" if not np.isnan(pe) else "    NaN"
         print(f"{day:>5} {acc_s:>7} {r1_s:>7} {r2_s:>7} {ae_s:>8} {pe_s:>10} {n:>6}")
 
     print("=" * len(header))
@@ -662,6 +695,7 @@ def print_skill_table(results: dict, active_results: dict | None = None) -> None
 # ---------------------------------------------------------------------------
 # Smoke test (no model, no data)
 # ---------------------------------------------------------------------------
+
 
 def run_smoke_test() -> None:
     """
@@ -696,21 +730,22 @@ def run_smoke_test() -> None:
 
     # --- EOF projection (synthetic basis) ---
     basis_synth = {
-        "eof1":      np.array([0.6, 0.5, 0.6]) / np.linalg.norm([0.6, 0.5, 0.6]),
-        "eof2":      np.array([0.5, -0.6, 0.6]) / np.linalg.norm([0.5, -0.6, 0.6]),
-        "olr_clim":  np.zeros(366),
+        "eof1": np.array([0.6, 0.5, 0.6]) / np.linalg.norm([0.6, 0.5, 0.6]),
+        "eof2": np.array([0.5, -0.6, 0.6]) / np.linalg.norm([0.5, -0.6, 0.6]),
+        "olr_clim": np.zeros(366),
         "u850_clim": np.zeros(366),
         "u200_clim": np.zeros(366),
-        "olr_std":   1.0,
-        "u850_std":  1.0,
-        "u200_std":  1.0,
-        "doy":       np.arange(1, 367),
+        "olr_std": 1.0,
+        "u850_std": 1.0,
+        "u200_std": 1.0,
+        "doy": np.arange(1, 367),
     }
     r1, r2 = project_fields_to_rmm(0.5, -0.3, 0.2, doy=45, basis=basis_synth)
     print(f"  project_fields_to_rmm → RMM1={r1:.4f}  RMM2={r2:.4f}")
 
     # --- load_basis with a synthetic npz ---
     import tempfile
+
     with tempfile.NamedTemporaryFile(suffix=".npz", delete=False) as f:
         tmp_path = Path(f.name)
     np.savez(
@@ -736,14 +771,16 @@ def run_smoke_test() -> None:
 
     # --- Synthetic results dict → CSV + plots (dry-run without file write) ---
     synthetic_results = {
-        "leads":     list(range(1, 31)),
-        "acc":       [max(0, 1.0 - 0.03 * d + rng.uniform(-0.02, 0.02)) for d in range(1, 31)],
+        "leads": list(range(1, 31)),
+        "acc": [
+            max(0, 1.0 - 0.03 * d + rng.uniform(-0.02, 0.02)) for d in range(1, 31)
+        ],
         "rmse_rmm1": [0.2 + 0.04 * d for d in range(1, 31)],
         "rmse_rmm2": [0.2 + 0.035 * d for d in range(1, 31)],
-        "amp_err":   [0.05 * d ** 0.5 for d in range(1, 31)],
-        "phase_err": [5.0 + 4.0 * d ** 0.7 for d in range(1, 31)],
-        "n_cases":   [50] * 30,
-        "records":   [],
+        "amp_err": [0.05 * d**0.5 for d in range(1, 31)],
+        "phase_err": [5.0 + 4.0 * d**0.7 for d in range(1, 31)],
+        "n_cases": [50] * 30,
+        "records": [],
     }
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -752,8 +789,13 @@ def run_smoke_test() -> None:
         assert csv_path.exists(), "CSV not written"
         df = pd.read_csv(str(csv_path))
         assert list(df.columns) == [
-            "lead_day", "acc", "rmse_rmm1", "rmse_rmm2",
-            "amp_err", "phase_err", "n_cases"
+            "lead_day",
+            "acc",
+            "rmse_rmm1",
+            "rmse_rmm2",
+            "amp_err",
+            "phase_err",
+            "n_cases",
         ], f"CSV columns mismatch: {list(df.columns)}"
         print(f"  save_summary_csv OK  shape={df.shape}")
 
@@ -769,56 +811,77 @@ def run_smoke_test() -> None:
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Lead-dependent MJO skill evaluation (Wheeler-Hendon 2004)."
     )
     p.add_argument(
-        "--config", type=Path, default=None,
+        "--config",
+        type=Path,
+        default=None,
         help="Path to YAML config used when the checkpoint was trained.",
     )
     p.add_argument(
-        "--checkpoint", type=Path, default=None,
+        "--checkpoint",
+        type=Path,
+        default=None,
         help="Path to a .pt checkpoint file (output of Trainer.save_checkpoint).",
     )
     p.add_argument(
-        "--targets", type=Path, default=Path("data/rmm_targets.nc"),
+        "--targets",
+        type=Path,
+        default=Path("data/rmm_targets.nc"),
         help="Path to rmm_targets.nc (default: data/rmm_targets.nc).",
     )
     p.add_argument(
-        "--basis", type=Path, default=Path("data/rmm_basis.npz"),
+        "--basis",
+        type=Path,
+        default=Path("data/rmm_basis.npz"),
         help="Path to rmm_basis.npz (default: data/rmm_basis.npz).",
     )
     p.add_argument(
-        "--out-dir", type=Path, default=Path("evaluation/mjo_skill"),
+        "--out-dir",
+        type=Path,
+        default=Path("evaluation/mjo_skill"),
         help="Directory to write CSV, plots, and metadata (default: evaluation/mjo_skill).",
     )
     p.add_argument(
-        "--split", choices=["val", "test"], default="val",
+        "--split",
+        choices=["val", "test"],
+        default="val",
         help="Which data split to evaluate (default: val = 2016–2019).",
     )
     p.add_argument(
-        "--max-lead-days", type=int, default=MAX_LEAD_DAYS,
+        "--max-lead-days",
+        type=int,
+        default=MAX_LEAD_DAYS,
         help=f"Maximum lead time in days (default: {MAX_LEAD_DAYS}).",
     )
     p.add_argument(
-        "--active-mjo-only", action="store_true",
+        "--active-mjo-only",
+        action="store_true",
         help="Restrict initial conditions to active MJO cases (amp > 1.0).",
     )
     p.add_argument(
-        "--also-active", action="store_true",
+        "--also-active",
+        action="store_true",
         help="Also compute active-MJO-only skill curve alongside all-case curve.",
     )
     p.add_argument(
-        "--device", type=str, default=None,
+        "--device",
+        type=str,
+        default=None,
         help="PyTorch device string (default: cuda if available, else cpu).",
     )
     p.add_argument(
-        "--smoke-test", action="store_true",
+        "--smoke-test",
+        action="store_true",
         help="Run synthetic smoke test — no model, data, or GPU required.",
     )
     p.add_argument(
-        "--quiet", action="store_true",
+        "--quiet",
+        action="store_true",
         help="Suppress progress output.",
     )
     return p.parse_args()
@@ -828,12 +891,12 @@ def _load_model_and_config(args: argparse.Namespace):
     """Load model + config from checkpoint and config file."""
     import torch
     import yaml
+
     from src.model import load_model
 
     if args.config is None or not args.config.exists():
         raise FileNotFoundError(
-            f"Config file not found: {args.config}. "
-            "Pass --config path/to/config.yaml"
+            f"Config file not found: {args.config}. Pass --config path/to/config.yaml"
         )
     with open(args.config) as f:
         cfg = yaml.safe_load(f)
@@ -894,24 +957,29 @@ def main() -> None:
     # ---- Build dataloader (val split only) ----
     # Import locally to avoid hard dependency when running smoke-test
     from src.trainer import build_dataloader
-    val_loader = build_dataloader(cfg, split=args.split if args.split == "val" else "val")
+
+    val_loader = build_dataloader(
+        cfg, split=args.split if args.split == "val" else "val"
+    )
 
     # ---- Prepare output dir ----
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
     # ---- Metadata file ----
     import json
+
     meta = {
-        "timestamp":    datetime.utcnow().isoformat() + "Z",
-        "split":        args.split,
-        "checkpoint":   str(args.checkpoint) if args.checkpoint else "None",
-        "config":       str(args.config),
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "split": args.split,
+        "checkpoint": str(args.checkpoint) if args.checkpoint else "None",
+        "config": str(args.config),
         "max_lead_days": args.max_lead_days,
         "active_mjo_only": args.active_mjo_only,
-        "device":       str(device),
+        "device": str(device),
     }
     try:
         import subprocess
+
         meta["git_commit"] = subprocess.check_output(
             ["git", "rev-parse", "HEAD"], text=True
         ).strip()
@@ -921,7 +989,9 @@ def main() -> None:
 
     # ---- Main evaluation ----
     if not args.quiet:
-        print(f"\nRunning evaluation (split={args.split}, max_lead_days={args.max_lead_days}):")
+        print(
+            f"\nRunning evaluation (split={args.split}, max_lead_days={args.max_lead_days}):"
+        )
 
     results = run_evaluation(
         model=model,
@@ -957,17 +1027,18 @@ def main() -> None:
     csv_path = save_summary_csv(results, args.out_dir)
 
     ckpt_label = args.checkpoint.stem if args.checkpoint else "no_ckpt"
-    save_skill_plots(results, args.out_dir, label=ckpt_label,
-                     active_results=active_results)
+    save_skill_plots(
+        results, args.out_dir, label=ckpt_label, active_results=active_results
+    )
 
     print_skill_table(results, active_results=active_results)
 
     print(f"\n  Outputs written to: {args.out_dir}/")
     print(f"   • {csv_path.name}")
-    print(f"   • mjo_acc_vs_lead.png")
-    print(f"   • mjo_rmse_vs_lead.png")
-    print(f"   • mjo_amp_phase_err.png")
-    print(f"   • metadata.json")
+    print("   • mjo_acc_vs_lead.png")
+    print("   • mjo_rmse_vs_lead.png")
+    print("   • mjo_amp_phase_err.png")
+    print("   • metadata.json")
 
     # Print quick summary
     d15_idx = 14  # 0-indexed day 15
