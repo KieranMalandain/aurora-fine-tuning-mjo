@@ -22,7 +22,12 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["ruff>=0.6", "pytest>=8.3", "pre-commit>=3.8"]
+dev = [
+    "ruff>=0.6",
+    "pytest>=8.3",
+    "pre-commit>=3.8",
+    "pyrefly>=1.2.0",
+]
 
 [[tool.uv.index]]
 name = "pytorch-cu121"
@@ -43,3 +48,75 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/aurora_mjo"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.format]
+# Exclude legacy un-refactored files so A3 respects "Must not touch src/ and scripts/"
+exclude = [
+    "src/**",
+    "scripts/**",
+    "tools/**",
+    "inspect_vars.py",
+    "test_dataset.py",
+    "train.py",
+    "*.md",
+    "docs/**",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/**" = ["E402"]   # scripts may adjust sys.path before importing
+"run.py" = ["B008"]       # typer's API is function calls in argument defaults
+
+# TODO(C1): Existing lint findings in src/ and root to be resolved during package migration
+"src/dataset.py" = ["E501", "F841", "B028"]
+"src/loss.py" = ["B006", "E501"]
+"src/trainer.py" = ["B905"]
+"src/model.py" = ["UP038"]
+"inspect_vars.py" = ["E501"]
+
+# TODO(C3): Existing lint findings in scripts/ and tools/ to be resolved during scripts refactoring
+"scripts/compute_rmm.py" = ["F841"]
+"scripts/evaluate_mjo.py" = ["F821", "B007", "E501", "UP038"]
+"scripts/explore_nersc_data.py" = ["E501"]
+"scripts/plot_loss.py" = ["E501", "UP015"]
+"scripts/scan_for_bad_values.py" = ["E501"]
+"scripts/smoke_test_freeze.py" = ["F401", "E501", "UP038"]
+"scripts/test_num_workers.py" = ["B023", "B007", "F821", "E722"]
+"scripts/verify_dataset_loader.py" = ["E501"]
+"tools/diagnose_val_nan.py" = ["B007"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-markers --ignore=test_dataset.py --ignore=scripts"
+markers = [
+    "needs_data: needs the real CFS ERA5 archive. Excluded from CI.",
+    "needs_gpu: needs a CUDA device. Excluded from CI.",
+    "slow: takes more than a few seconds.",
+    "live: needs a live external system (CDS API, HF hub). Excluded from CI.",
+]
+
+[tool.pyrefly]
+# RATCHET, not a permanent exclusion. Entries come OFF this list, never on.
+# ~6950 lines of untyped scientific Python; trainer.py alone is 1138.
+# See docs/campaigns/refactor/01_TARGET_STATE.md D5.
+project-excludes = [
+    "scripts/**",
+    "slurm_scripts/**",
+    "tools/**",
+    "notebooks/**",
+    "src/checkpoint.py",
+    "src/dataset.py",
+    "src/loss.py",
+    "src/model.py",
+    "src/trainer.py",
+    "src/__init__.py",
+    "inspect_vars.py",
+    "test_dataset.py",
+    "train.py",
+]
