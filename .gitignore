@@ -3,41 +3,49 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# Conda environments
-/env/
-/venv/
-/.venv/
-/conda-env/
+# Python virtual environments & dependencies
+# uv.lock IS committed — it is the reproducibility guarantee.
+.venv/
+env/
+venv/
+conda-env/
+
+# Build and distribution artifacts
+build/
+dist/
+*.egg-info/
+
+# Editor & OS files
+.vscode/
+.DS_Store
 
 # Jupyter Notebook checkpoints
-.ipynb_checkpoints
+.ipynb_checkpoints/
 
-# VSCode settings
-.vscode/
+# Test & linter caches
+.pytest_cache/
+.ruff_cache/
 
-# Data files - IMPORTANT!
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Data files
 data_local/
 *.grib
-*.nc
 *.idx
-
-# Log files
-slurm_logs/
-*.log
-experiment_outputs/
+*.nc
+# tests/fixtures/*.nc ARE committed — they are small and synthetic. See D1.
+!tests/fixtures/**
 
 # Checkpoints
 checkpoints/
 *.pt
 
-# Legacy
-investigation_phase1/
-
-checkpoints/baseline/*
-!checkpoints/baseline/metrics.jsonl
-
-checkpoints/lora/*
-!checkpoints/lora/metrics.jsonl
-
-checkpoints/physics_informed/*
-!checkpoints/physics_informed/metrics.jsonl
+# Log files and run outputs
+slurm_logs/
+*.log
+experiment_outputs/
+test_outputs/
+tools/probe_results/
