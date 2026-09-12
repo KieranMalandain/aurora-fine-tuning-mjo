@@ -19,6 +19,7 @@ dependencies = [
     "pyyaml==6.0.3",        # config loading
     "typer==0.25.1",        # run.py, added in C2
     "matplotlib==3.10.9",   # scripts/plot_loss.py
+    "pydantic>=2.8",        # config validation, added in E2
 ]
 
 [dependency-groups]

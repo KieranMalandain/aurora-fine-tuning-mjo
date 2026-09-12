@@ -23,11 +23,11 @@ from pathlib import Path  # noqa: E402
 import typer  # noqa: E402
 
 from aurora_mjo.checkpoint import CheckpointManager  # noqa: E402
-from aurora_mjo.cli_support import (  # noqa: E402
+from aurora_mjo.cli_support import run_train  # noqa: E402
+from aurora_mjo.config import (  # noqa: E402
     apply_overrides,
     load_config,
     print_config,
-    run_train,
 )
 
 logging.basicConfig(

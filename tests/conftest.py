@@ -86,7 +86,7 @@ def synthetic_dataset(synthetic_root: Path, synthetic_slt: Path) -> LANLMJODatas
 def unified_config() -> dict[str, Any]:
     """Resolved baseline config dictionary from configs/unified.yaml."""
     cfg_path = Path(__file__).resolve().parent.parent / "configs" / "unified.yaml"
-    return load_config(cfg_path, mode="baseline")
+    return load_config(cfg_path, mode="baseline").to_dict()
 
 
 @pytest.fixture(scope="session")

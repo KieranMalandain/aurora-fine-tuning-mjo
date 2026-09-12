@@ -26,7 +26,6 @@ Background:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 import pytest
 from aurora import Aurora
@@ -176,7 +175,7 @@ def test_train_period_only_normalisation_bounds(config_path: Path) -> None:
     period to prevent evaluation leakage.
     """
     for mode in MODES:
-        cfg: dict[str, Any] = load_config(config_path, mode=mode)
+        cfg = load_config(config_path, mode=mode)
         real_data = cfg.get("data", {}).get("real", {})
         train_years = real_data.get("train_years")
         val_years = real_data.get("val_years")

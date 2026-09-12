@@ -29,7 +29,7 @@ from typing import Any
 
 import pytest
 
-from aurora_mjo.cli_support import apply_overrides, load_config
+from aurora_mjo.config import Config, apply_overrides, load_config
 
 MODES = ("baseline", "physics_informed", "lora", "combined")
 
@@ -47,7 +47,7 @@ def test_all_four_modes_resolve_cleanly(config_path: Path) -> None:
     """Verify all four modes in configs/unified.yaml resolve without error."""
     for mode in MODES:
         cfg = load_config(config_path, mode=mode)
-        assert isinstance(cfg, dict), f"Failed to load config for mode {mode}"
+        assert isinstance(cfg, dict | Config), f"Failed to load config for mode {mode}"
         assert cfg.get("experiment", {}).get("mode") == mode
 
 
