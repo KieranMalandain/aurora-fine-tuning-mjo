@@ -1,68 +1,54 @@
 # Data Inventory
 
-## Purpose
+**Status:** Authoritative Data Lineage Catalog  
+**Primary Data Archive:** NERSC Community File System (CFS)  
 
-This document records where data currently lives, what subset is available where, and what assumptions the codebase currently makes.
+---
 
-## Current Storage Locations
+## 1. Primary Production Data: NERSC / LANL ERA5 Archive
 
-### Yale Bouchet HPC
-- Contains: local development sample / subset data
-- Intended use: code development, smoke testing, small-scale validation
-- Constraints: may not contain full historical span or all variables
+- **Filesystem Path:**
+  ```text
+  /global/cfs/cdirs/m4946/xiaoming/zm4946.MachLearn/PrcsPrep/prcs.ERA5/prcs.ERA5.Remap/Results
+  ```
+- **Access Discipline:** **STRICTLY READ-ONLY.** Owned by another research allocation (`m4946`).
+- **Format:** NetCDF4, 1.0° regular lat/lon grid (180 latitude × 360 longitude), 6-hourly instantaneous (`6hrInst`), structured in `Step00/` through `Step11/` subdirectories covering 1980–2024.
+- **Dynamic Upsampling:** All 1.0° fields are dynamically upsampled to Aurora's native 0.25° grid (720 × 1440) on GPU inside `src/aurora_mjo/dataset.py`.
+- **Parallel Filesystem Locking:** Requires `HDF5_USE_FILE_LOCKING=FALSE` (enforced at Python startup by `src/aurora_mjo/env.py`).
 
-### LANL / NERSC
-- Contains: larger or full dataset
-- Intended use: large-scale training and full evaluation
-- Constraints: not yet the main active development environment
+### Active Production Variables
+- **Surface Variables (6):**
+  - `2t`: 2m air temperature (K)
+  - `10u`: 10m zonal wind component (m s⁻¹)
+  - `10v`: 10m meridional wind component (m s⁻¹)
+  - `msl`: Surface pressure proxy (`ps`) (Pa) — *see [`docs/SPEC.md`](SPEC.md) §6*
+  - `ttr`: Top net long-wave radiation flux proxy (`mtnlwrf`) (W m⁻²)
+  - `tcwv`: Total column water vapor (kg m⁻²)
+- **Atmospheric Variables (5 variables × 13 vertical levels):**
+  - `z`: Geopotential (m² s⁻²)
+  - `q`: Specific humidity (kg kg⁻¹)
+  - `t`: Air temperature (K)
+  - `u`: Zonal wind component (m s⁻¹)
+  - `v`: Meridional wind component (m s⁻¹)
+  - *Pressure levels (hPa):* 50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 850, 925, 1000.
+- **Static Invariant Variables (3):**
+  - Surface geopotential (`z`) from `Step00/ERA5.invariant`
+  - Land-sea mask (`lsm`) from `Step00/ERA5.invariant`
+  - Soil type (`slt`) from `/pscratch/sd/k/kam352/Aurora/slt/slt_data.nc` (0.25° native)
 
-## Important Principle
+---
 
-Yale and LANL/NERSC should be treated as distinct data environments until parity is verified.
+## 2. Derived Research Artifacts
 
-Agents must not assume:
-- identical file paths
-- identical preprocessing state
-- identical variable availability
-- identical normalization statistics
-- identical chunking/layout
-- identical climatology coverage
+Derived data files are stored in project scratch or repository paths, never in upstream CFS:
+- **RMM Targets & Basis:**
+  - `data/rmm_basis.npz`: EOF eigenvectors and normalisation scalings computed from training split.
+  - `data/rmm_targets.nc`: Precomputed ground-truth RMM indices across evaluation years.
+- **Evaluation Outputs:**
+  - `evaluation/mjo_skill/`: Anomaly correlation coefficient (ACC) and RMSE curves vs. forecast lead days.
 
-## Current Risks
+---
 
-- code written against Yale sample paths may not generalize to NERSC paths
-- normalization statistics from Yale sample data may not be valid for full training
-- RMM climatology built on partial data may differ from final evaluation protocol
-- scripts may silently assume local file naming conventions
+## 3. Historical & Retired Datasets
 
-## Required Mitigations
-
-- path roots must be configurable
-- dataset manifests should be explicit
-- train-time normalization stats should be recomputed on the full training dataset
-- data validation scripts should compare variable coverage across environments
-
-## Recommended Next Step
-
-Create a machine-readable manifest for each environment:
-- dataset root
-- years available
-- variables available
-- pressure levels available
-- temporal resolution
-- format and chunking details
-
-## Data Locations & Variables
-
-### 1. NERSC / LANL (Primary Production Data)
-- **Path:** `/global/cfs/cdirs/m4946/xiaoming/zm4946.MachLearn/PrcsPrep/prcs.ERA5/prcs.ERA5.Remap/Results`
-- **Format:** Native 1-degree (180x360), 6-hourly, split into `StepXX/` subdirectories. (Verified 1462 samples for year 1980).
-- **Surface Variables Present:** `2t`, `10u`, `10v`, `msl` (proxy using `ps`), `ttr` (proxy using `mtnlwrf`), `tcwv`. Output shape after upsampling is `[1, 720, 1440]` for each target and `[1, 2, 720, 1440]` for inputs.
-- **Atmos Variables Present:** `z`, `q`, `t`, `u`, `v` (13 levels sliced). Output shape after upsampling is `[1, 13, 720, 1440]` for each target and `[1, 2, 13, 720, 1440]` for inputs.
-- **Static Variables Present:** `z`, `lsm` from invariant files, plus `slt` correctly injected from `/pscratch/sd/k/kam352/Aurora/slt/slt_data.nc`. Output shape is `[1, 720, 1440]`. `z`, `lsm`, and `slt` load real physical data correctly.
-- **Preprocessing:** No pre-processed outputs exist yet. All upsampling to 0.25-degree happens dynamically in `src/dataset.py`.
-
-### 2. Yale Grace/Bouchet (Legacy / Investigation Data)
-- **Path:** `/home/kam352/project_pi_ll2247/kam352/aurora-fine-tuning-mjo/era5_jan2015_daily`. _note that this was previously `/gpfs/gibbs/project/lu_lu/kam352/era5_jan2015_daily` before migrating to Yale Bouchet---do not use this second, deprecated path._
-- **Format:** 0.25-degree (721x1440 - sliced to 720x1440), 6-hourly.
-- **Status:** Used for Phase 1 micro-fine-tuning proof-of-concept. Do not use for production rollout training.
+- **Early Prototype (January 2015 Sample):** An early 1-month subset of ERA5 data (January 2015) was used during initial proof-of-concept testing. That dataset is retired and is not used in production training or evaluation.

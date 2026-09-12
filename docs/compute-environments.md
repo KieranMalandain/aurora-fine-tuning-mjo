@@ -1,62 +1,33 @@
 # Compute Environments
 
-## Overview
+**Target Environment:** NERSC Perlmutter (National Energy Research Scientific Computing Center)  
+**Hardware Configuration:** 1 node × 4 × NVIDIA A100 80GB SXM4 GPUs per job  
+**Workload Manager:** SLURM  
 
-This project is currently developed across multiple compute environments.
+---
 
-## Environment A: Yale Bouchet HPC
+## 1. Primary Production Environment: NERSC Perlmutter
 
-Role:
-- primary code editing and iteration environment for now
+All active development, verification, model fine-tuning, and sub-seasonal evaluation execute on NERSC Perlmutter.
 
-Typical use:
-- code inspection
-- smoke tests
-- short debug runs
-- small-sample experiments
+### 1.1 Compute Nodes
+- **Node Architecture:** HPE Cray EX liquid-cooled compute nodes.
+- **CPUs:** AMD EPYC 7763 64-core processor (64 CPU cores per GPU node; `-c 64` requested for training jobs to ensure optimal dataloader worker throughput).
+- **GPUs:** 4 × NVIDIA A100 80GB SXM4 with NVLink-3 interconnect (total 320GB HBM2e per node).
+- **Interconnect:** HPE Slingshot 11 network (200 Gbps).
 
-Risks:
-- data subset may not represent final training distribution
-- local assumptions may not hold on LANL/NERSC
+### 1.2 Storage Subsystems
+- **Community File System (CFS):** Read-only project data storage at `/global/cfs/cdirs/m4946/...` hosting the 45-year 6-hourly ERA5 remapped NetCDF dataset.
+  - *Constraint:* Access requires disabling parallel filesystem advisory locks: `HDF5_USE_FILE_LOCKING=FALSE` (handled in Python via `src/aurora_mjo/env.py` and sourced via `slurm_scripts/env.sh`).
+- **Scratch Space (`/pscratch`):** High-speed Lustre scratch filesystem used for virtual environments, caches (`UV_CACHE_DIR`), checkpoints (`checkpoints/`), and static soil type data (`slt_data.nc`).
+  - *Warning:* `/pscratch` is subject to periodic purge policies. Checkpoint and model artifacts must be synced to permanent project storage for long-term archival.
 
-## Environment B: LANL / NERSC
+### 1.3 Environment & Package Management
+- **`uv`:** Single package manager for dependency resolution, virtual environment management, and script execution.
+- **Cache Redirection:** Because default `$HOME` directories lack POSIX file locking support (triggering `Errno 524`), all package, virtualenv, and pre-commit caches are redirected to `/pscratch`.
 
-Role:
-- eventual large-scale training and evaluation environment
+---
 
-Typical use:
-- full-data runs
-- long rollouts
-- full climatology/statistics generation
-- final experiments
+## 2. Historical & Retired Environments
 
-Risks:
-- project not yet fully migrated
-- scripts may need path, scheduler, environment, and storage adaptation
-
-## Engineering Rule
-
-All code should be written so that:
-- paths are configurable
-- environment-specific values are externalized
-- training/eval scripts do not hardcode Yale-specific assumptions
-
-## Configuration Guidance
-
-Prefer environment-specific configuration layers for:
-- data roots
-- checkpoint roots
-- output roots
-- temporary cache paths
-- SLURM/account settings
-
-## Human Notes
-
-At this point, we are not setup on the LANL NERSC cluster. More information will be provided here, for example the points below, once the human has completed that step:
-
-[EDIT ME]
-Add:
-- scheduler/account differences
-- conda/module differences
-- storage mount differences
-- whether internet access differs
+- **Early Development Environments:** Early proof-of-concept testing was performed on a 1-month subset of ERA5 data (January 2015). That environment is retired. All production pipelines target NERSC Perlmutter exclusively.
