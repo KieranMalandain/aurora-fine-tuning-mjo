@@ -61,9 +61,7 @@ def test_static_vars_load_correct_shapes_and_finite(
     for name in ("z", "lsm", "slt"):
         assert name in statics, f"Missing static variable '{name}'"
         tensor = statics[name]
-        assert (
-            tensor.shape == expected_shape
-        ), f"Static '{name}' has shape {tensor.shape}, expected {expected_shape}"
+        assert tensor.shape == expected_shape, f"Static '{name}' shape != {expected_shape}"
         assert torch.isfinite(tensor).all(), f"Static '{name}' contains non-finite values"
 
 
@@ -169,9 +167,7 @@ def test_current_zero_fallback_on_unreadable_invariant(
     # Current behaviour: z is substituted with all-zeros tensor
     z_tensor = statics["z"]
     assert z_tensor.shape == (720, 1440)
-    assert (
-        z_tensor == 0.0
-    ).all(), "Current fallback must substitute all zeros when invariant Z load fails."
+    assert (z_tensor == 0.0).all(), "Current fallback must substitute all zeros"
 
 
 def test_synthetic_z_mean_far_from_zero(synthetic_dataset: LANLMJODataset) -> None:
@@ -200,7 +196,5 @@ def test_real_cfs_z_mean_matches_prior() -> None:
         z_mean = float(ds["Z"].mean())
 
     # Prior from 03_DOMAIN_PRIORS.md §3 is 3709.2466 m^2/s^2
-    assert (
-        abs(z_mean - 3709.2466) < 50.0
-    ), f"Real Z mean {z_mean:.4f} diverges from domain prior 3709.2466 m^2/s^2"
+    assert abs(z_mean - 3709.2466) < 50.0, f"Real Z mean {z_mean:.4f} != prior 3709.2466"
     assert z_mean > 3000.0, "Real Z mean must be far from zero"

@@ -134,25 +134,17 @@ def test_grad_guard_skips_step_and_preserves_adam_buffers_on_nan(tmp_path: Path)
     trainer.train_epoch(1)
 
     # 1. Counter incremented
-    assert (
-        trainer._nonfinite_grad_steps == 1
-    ), f"Expected _nonfinite_grad_steps == 1, got {trainer._nonfinite_grad_steps}"
+    assert trainer._nonfinite_grad_steps == 1, f"Skips: {trainer._nonfinite_grad_steps}"
 
     # 2. Weights unchanged (optimizer step skipped)
-    assert torch.equal(
-        trainer.model.fc.weight, init_weight
-    ), "Model weights were modified despite non-finite gradient!"
+    assert torch.equal(trainer.model.fc.weight, init_weight), "Weights modified on NaN step"
 
     # 3. Scheduler not advanced
-    assert (
-        trainer.optimizer.param_groups[0]["lr"] == init_lr
-    ), "Scheduler stepped despite non-finite gradient!"
+    assert trainer.optimizer.param_groups[0]["lr"] == init_lr, "Scheduler stepped on NaN step"
 
     # 4. Adam moment buffers uninitialized / uncorrupted
     param_state = trainer.optimizer.state.get(trainer.model.fc.weight, {})
-    assert (
-        "exp_avg" not in param_state
-    ), "Adam exp_avg buffer was allocated/updated on a skipped non-finite step!"
+    assert "exp_avg" not in param_state, "Adam buffer allocated on skipped step"
 
 
 def test_grad_guard_selective_finite_step_advances(tmp_path: Path) -> None:
@@ -168,9 +160,7 @@ def test_grad_guard_selective_finite_step_advances(tmp_path: Path) -> None:
     assert trainer._nonfinite_grad_steps == 0
 
     # 2. Weights updated by optimizer step
-    assert not torch.equal(
-        trainer.model.fc.weight, init_weight
-    ), "Model weights did not update on a valid finite step!"
+    assert not torch.equal(trainer.model.fc.weight, init_weight), "Weights not updated"
 
     # 3. Adam moment buffers initialized with finite values
     param_state = trainer.optimizer.state[trainer.model.fc.weight]

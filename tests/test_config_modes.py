@@ -123,9 +123,7 @@ def test_apply_overrides_locked_against_b1_fingerprint(
 
     # In PyYAML 1.1 / safe_load, scientific notation without decimal (1e-5) coerces to str '1e-5'
     assert overridden["training"]["optimizer"]["lr"] == "1e-5"
-    assert (
-        overridden == expected_fp
-    ), "Resolved config with override differs from B1 canonical fingerprint!"
+    assert overridden == expected_fp, "Resolved config with override differs from B1 fingerprint"
 
 
 def test_apply_overrides_semantics_and_type_coercion(config_path: Path) -> None:

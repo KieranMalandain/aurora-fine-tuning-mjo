@@ -189,9 +189,7 @@ def test_gapped_fixture_sample_reduction_exact(
         # A 1-step sample requires 3 timestamps: t-6h, t, t+6h
         step_times = timeline[start_idx : start_idx + 3]
         diffs = np.diff(step_times)
-        assert np.all(
-            diffs == six_hours_s
-        ), f"Sample start {start_idx} spans non-6-hour gap: {diffs}"
+        assert np.all(diffs == six_hours_s), f"Start {start_idx} spans non-6h gap: {diffs}"
 
 
 def test_six_hour_consecutive_spacing(synthetic_dataset: LANLMJODataset) -> None:

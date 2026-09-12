@@ -64,9 +64,7 @@ def test_msl_override_present_in_all_modes(config_path: Path) -> None:
             "Its absence triggers fatal -36 sigma inputs on high terrain."
         )
         msl_cfg = norm_stats["msl"]
-        assert (
-            "mean" in msl_cfg and "std" in msl_cfg
-        ), f"Mode '{mode}' model.norm_stats.msl must specify both 'mean' and 'std'."
+        assert "mean" in msl_cfg and "std" in msl_cfg, f"Mode '{mode}' missing mean/std"
         assert msl_cfg["std"] > 0, f"Mode '{mode}' msl std must be positive."
 
 
@@ -96,12 +94,8 @@ def test_msl_override_applied_to_aurora_locations_and_scales(
 
         load_model(model_cfg, norm_stats=model_cfg.get("norm_stats"))
 
-        assert (
-            locations["msl"] == msl_mean
-        ), f"locations['msl'] ({locations['msl']}) was not updated to config mean ({msl_mean})"
-        assert (
-            scales["msl"] == msl_std
-        ), f"scales['msl'] ({scales['msl']}) was not updated to config std ({msl_std})"
+        assert locations["msl"] == msl_mean, "locations['msl'] not updated to config mean"
+        assert scales["msl"] == msl_std, "scales['msl'] not updated to config std"
     finally:
         # Restore global state so other tests are not polluted
         if orig_loc is not None:
@@ -197,9 +191,5 @@ def test_train_period_only_normalisation_bounds(config_path: Path) -> None:
         assert val_years[0] <= val_years[1], "val_years must be ordered"
         assert test_years[0] <= test_years[1], "test_years must be ordered"
 
-        assert (
-            train_years[1] < val_years[0]
-        ), f"Train period end ({train_years[1]}) must precede val period start ({val_years[0]})."
-        assert (
-            val_years[1] < test_years[0]
-        ), f"Val period end ({val_years[1]}) must precede test period start ({test_years[0]})."
+        assert train_years[1] < val_years[0], "Train period end must precede val period start"
+        assert val_years[1] < test_years[0], "Val period end must precede test period start"
