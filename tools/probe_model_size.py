@@ -187,8 +187,8 @@ def run_probe(size: str, cfg: dict, steps: int, warmup: int) -> dict:
         )
         model_cfg["gradient_checkpointing"] = False
 
-    from src.loss import TropicalWeightedL1Loss
-    from src.model import load_model
+    from aurora_mjo.loss import TropicalWeightedL1Loss
+    from aurora_mjo.model import load_model
 
     norm_stats = model_cfg.get("norm_stats") or None
     print(f"\n=== Loading model_type={size!r} via the real load_model() path ===")

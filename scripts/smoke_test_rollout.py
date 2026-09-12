@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import torch
 from torch import nn
 
-from src.trainer import Trainer
+from aurora_mjo.trainer import Trainer
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -181,7 +181,7 @@ class StubModel(nn.Module):
 # Monkey-patch _advance_batch to accept FakeBatch (avoids aurora import)
 # ---------------------------------------------------------------------------
 
-import src.trainer as _trainer_module
+import aurora_mjo.trainer as _trainer_module
 
 
 def _fake_advance_batch(in_batch, pred_batch, step_index):

@@ -355,7 +355,7 @@ def main(argv=None):
     #    other 3 ranks hit the (persistent) HF cache instead of racing the
     #    network. Classic double-barrier pattern.
     # ------------------------------------------------------------------
-    from src.model import load_model
+    from aurora_mjo.model import load_model
 
     model_cfg = cfg.get("model", {})
     norm_stats = model_cfg.get("norm_stats") or None
@@ -372,7 +372,7 @@ def main(argv=None):
     # 5. Resolve resume/warm-start BEFORE building trainer state.
     #    Priority: explicit path > auto-latest in save_dir > init_from.
     # ------------------------------------------------------------------
-    from src.checkpoint import CheckpointManager
+    from aurora_mjo.checkpoint import CheckpointManager
 
     resume_path, warm_start_path = None, None
     save_dir = cfg.get("checkpointing", {}).get("save_dir", "checkpoints/run")
@@ -421,7 +421,7 @@ def main(argv=None):
     # ------------------------------------------------------------------
     # 7. Trainer + state restore
     # ------------------------------------------------------------------
-    from src.trainer import Trainer
+    from aurora_mjo.trainer import Trainer
 
     if args.smoke_test:
         train_loader, val_loader = _install_smoke_test_loader(cfg, device)

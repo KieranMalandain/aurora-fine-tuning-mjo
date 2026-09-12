@@ -20,7 +20,7 @@ from aurora import Batch, Metadata
 
 # Make sure the local src/ is importable when running from repo root.
 sys.path.insert(0, ".")
-from src.model import load_model
+from aurora_mjo.model import load_model
 
 # ---------------------------------------------------------------------------
 # Tiny synthetic batch – matches AuroraSmallPretrained expectations.

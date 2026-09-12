@@ -57,8 +57,8 @@ import torch.nn.functional as F
 from torch import nn
 from torch.utils.data import DataLoader, DistributedSampler, Subset
 
-from src.checkpoint import CheckpointManager, MetricsLogger
-from src.loss import MoistureBudgetLoss, SpectralLoss, TropicalWeightedL1Loss
+from aurora_mjo.checkpoint import CheckpointManager, MetricsLogger
+from aurora_mjo.loss import MoistureBudgetLoss, SpectralLoss, TropicalWeightedL1Loss
 
 log = logging.getLogger(__name__)
 
@@ -320,7 +320,10 @@ def build_dataloader(cfg: dict, split: str) -> DataLoader:
     )
 
     if use_dummy:
-        from src.dummy_dataset import MJODataset, load_and_combine_files
+        from aurora_mjo.dummy_dataset import (  # TODO(C3): does not exist; C3 owns decision
+            MJODataset,
+            load_and_combine_files,
+        )
 
         dummy_cfg = data_cfg.get("dummy", {})
         surface_files = dummy_cfg.get("surface_files", [])
@@ -335,8 +338,8 @@ def build_dataloader(cfg: dict, split: str) -> DataLoader:
         )
         collate = MJODataset.collate_fn
     else:
-        from src.dataset import LANLMJODataset
-        from src.dataset import collate_fn as collate
+        from aurora_mjo.dataset import LANLMJODataset
+        from aurora_mjo.dataset import collate_fn as collate
 
         real_cfg = data_cfg.get("real", {})
         years = (

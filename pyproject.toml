@@ -74,10 +74,10 @@ select = ["E", "F", "I", "UP", "B"]
 "run.py" = ["B008"]       # typer's API is function calls in argument defaults
 
 # TODO(C1): Existing lint findings in src/ and root to be resolved during package migration
-"src/dataset.py" = ["E501", "F841", "B028"]
-"src/loss.py" = ["B006", "E501"]
-"src/trainer.py" = ["B905"]
-"src/model.py" = ["UP038"]
+"src/aurora_mjo/dataset.py" = ["E501", "F841", "B028"]
+"src/aurora_mjo/loss.py" = ["B006", "E501"]
+"src/aurora_mjo/trainer.py" = ["B905"]
+"src/aurora_mjo/model.py" = ["UP038"]
 "inspect_vars.py" = ["E501"]
 
 # TODO(C3): Existing lint findings in scripts/ and tools/ to be resolved during scripts refactoring
@@ -110,12 +110,11 @@ project-excludes = [
     "slurm_scripts/**",
     "tools/**",
     "notebooks/**",
-    "src/checkpoint.py",
-    "src/dataset.py",
-    "src/loss.py",
-    "src/model.py",
-    "src/trainer.py",
-    "src/__init__.py",
+    "src/aurora_mjo/checkpoint.py",
+    "src/aurora_mjo/dataset.py",
+    "src/aurora_mjo/loss.py",
+    "src/aurora_mjo/model.py",
+    "src/aurora_mjo/trainer.py",
     "inspect_vars.py",
     "test_dataset.py",
     "train.py",

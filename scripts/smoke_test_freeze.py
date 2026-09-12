@@ -17,7 +17,7 @@ What this tests
 import sys
 
 # ---------------------------------------------------------------------------
-# Minimal stubs so we can import src.model without a real checkpoint download.
+# Minimal stubs so we can import aurora_mjo.model without a real checkpoint download.
 # We monkey-patch Aurora classes to skip checkpoint loading.
 # ---------------------------------------------------------------------------
 
@@ -37,7 +37,7 @@ Aurora.load_checkpoint = lambda self, strict=True: None  # type: ignore[method-a
 # Now import the project module.
 # ---------------------------------------------------------------------------
 sys.path.insert(0, ".")
-from src.model import (
+from aurora_mjo.model import (
     _AURORA_DEFAULT_SURF_VARS,
     AuroraMJO,
     _log_param_counts,
