@@ -1,17 +1,25 @@
 #!/usr/bin/env python3
-"""
-scan_data_for_bad_values.py — sample a handful of files per variable and
-report NaN / Inf / extreme-value counts, to find which variable(s) are
-feeding the trainer non-finite or absurdly large values.
+"""Archived: Scan ERA5 NetCDF files for NaNs, Infs, and extreme values.
 
-Usage (run from the repo root, with the aurora_mjo conda env active):
-    python scan_data_for_bad_values.py --root /global/cfs/cdirs/m4946/xiaoming/zm4946.MachLearn/PrcsPrep/prcs.ERA5/prcs.ERA5.Remap/Results \
-        --years 1980 2015 --n-files-per-var 5
+HISTORICAL CONTEXT:
+Sampled files per variable and reported NaN / Inf / extreme-value counts to find
+which variables fed the trainer non-finite or unphysically large values.
 
-This does NOT import your training code — it re-implements just enough of
-the file-discovery logic (mirroring src/dataset.py's SURFACE_VAR_MAP /
-ATMOS_VAR_MAP) to sample real files directly, so it's safe to run standalone
-on a login node without touching GPUs or the training pipeline.
+WHAT IT VERIFIED:
+1. Checked for NaN and Inf values across all surface and atmospheric variables.
+2. Flagged values exceeding generous physical bounds (SANE_ABS_MAX).
+3. Monitored value range [vmin, vmax] per variable.
+
+ANSWER / MEASURED RESULT:
+Scans across training years confirmed that ERA5 preprocessing files contain zero
+NaNs and zero Infs (finite fraction 1.0) under normal reading conditions.
+Confirmed that non-finite training losses were caused by MSL normalization on surface
+pressure (-36 sigma input, Lesson 1) rather than raw NetCDF corruption.
+
+SUPERSEDED BY:
+tests/test_bad_values.py, which verifies clean scans offline on synthetic fixtures,
+asserts that the detector fires on injected NaNs/Infs/extremes, and tests real data
+under needs_data in pytest.
 """
 
 import argparse

@@ -1,17 +1,28 @@
 #!/usr/bin/env python3
-"""Smoke test: verify LoRA-aware backbone freezing in AuroraMJO.
+"""Archived: Smoke test for LoRA-aware backbone freezing in AuroraMJO.
 
-Run from the repo root with the aurora_mjo conda environment:
+HISTORICAL CONTEXT:
+Verified that freeze_backbone() freezes the standard backbone weights while keeping
+LoRA adapters (identified strictly by module type rather than name), injected variable
+embeddings (ttr, tcwv), unfrozen output heads, and the optional MJO head MLP trainable.
 
-    conda run -n aurora_mjo python scripts/smoke_test_freeze.py
-
-What this tests
----------------
-1. All standard Aurora backbone parameters are frozen (requires_grad=False).
+WHAT IT VERIFIED:
+1. Backbone parameters are frozen (requires_grad=False).
 2. LoRA adapter parameters (lora_A, lora_B) are trainable.
 3. Patch-embedding weights for injected variables (ttr, tcwv) are trainable.
-4. The MJO head MLP is fully trainable.
-5. The _log_param_counts helper prints a non-zero trainable count.
+4. Pretrained surface embeddings (2t, 10u, 10v, msl) are frozen.
+5. The MJO head MLP is fully trainable.
+6. Total trainable parameter counts are a small fraction (< 1%) of total.
+
+ANSWER / MEASURED RESULT:
+Freezing confirmed. In small LoRA mode, total params = 113,388,211; trainable = 598,835
+(0.53%); frozen = 112,789,376 (99.47%). Backbone has 330 frozen tensors; 160 LoRA adapter
+tensors are trainable. In small baseline mode without LoRA/MJO-head, trainable params
+equal exactly 41,008 (matching 03_DOMAIN_PRIORS.md §7).
+
+SUPERSEDED BY:
+tests/test_freeze.py, which tests LoRA module-type identification, parameter freezing,
+and exact parameter count invariants offline in pytest.
 """
 
 import sys
@@ -23,7 +34,7 @@ import sys
 
 # We need aurora installed; the environment should have it.
 try:
-    from aurora import Aurora, AuroraSmallPretrained
+    from aurora import Aurora
     from aurora.model.lora import LoRA, LoRARollout
 except ImportError:
     print("ERROR: 'aurora' package not found. Activate the aurora_mjo environment.")
@@ -78,7 +89,9 @@ def run_smoke_test() -> None:
     # Assertion 1: Backbone has at least some frozen params.
     # ------------------------------------------------------------------
     backbone_frozen = [p for p in backbone.parameters() if not p.requires_grad]
-    assert backbone_frozen, "FAIL: no frozen parameters found in backbone — freeze_backbone() may not have run."
+    assert (
+        backbone_frozen
+    ), "FAIL: no frozen parameters found in backbone — freeze_backbone() may not have run."
     print(f"PASS [1] backbone has {len(backbone_frozen)} frozen parameter tensors.")
 
     # ------------------------------------------------------------------
@@ -86,7 +99,7 @@ def run_smoke_test() -> None:
     # ------------------------------------------------------------------
     lora_trainable = []
     for mod_name, mod in backbone.named_modules():
-        if isinstance(mod, (LoRA, LoRARollout)):
+        if isinstance(mod, LoRA | LoRARollout):
             for p in mod.parameters():
                 lora_trainable.append((mod_name, p))
 
@@ -112,9 +125,8 @@ def run_smoke_test() -> None:
         assert (
             var in surf_embed.weights
         ), f"FAIL: '{var}' not in surf_token_embeds.weights — was it passed to Aurora?"
-        assert surf_embed.weights[
-            var
-        ].requires_grad, f"FAIL: embedding for '{var}' is FROZEN. It should be trainable (randomly initialized)."
+        msg = f"FAIL: embedding for '{var}' is FROZEN; should be trainable."
+        assert surf_embed.weights[var].requires_grad, msg
     print(f"PASS [3] injected variable embeddings {injected} are trainable.")
 
     # ------------------------------------------------------------------
@@ -122,9 +134,8 @@ def run_smoke_test() -> None:
     # ------------------------------------------------------------------
     for var in _AURORA_DEFAULT_SURF_VARS:
         if var in surf_embed.weights:
-            assert not surf_embed.weights[
-                var
-            ].requires_grad, f"FAIL: pretrained embedding for '{var}' should be FROZEN but is trainable."
+            msg = f"FAIL: pretrained embedding for '{var}' should be FROZEN but is trainable."
+            assert not surf_embed.weights[var].requires_grad, msg
     print("PASS [4] pretrained surface embeddings are frozen.")
 
     # ------------------------------------------------------------------

@@ -1,11 +1,23 @@
 #!/usr/bin/env python3
-"""Quick shape-verification script for the LANL dataset.
+"""Archived: Quick shape-verification script for the LANL dataset.
 
-Instantiates the dataset, fetches one sample, and prints all tensor
-shapes to confirm static_vars are 2D (H, W) as required by Aurora.
+HISTORICAL CONTEXT:
+Instantiated LANLMJODataset for year 2016 from CFS, fetched sample 0, and printed
+all tensor shapes to confirm static_vars are 2D (H, W) as required by Aurora.
 
-Run:
-  python scripts/verify_shapes.py
+WHAT IT VERIFIED:
+1. Static variables ('z', 'lsm', 'slt') are 2D tensors.
+2. Tensor ranks and axis ordering across all surface/atmos inputs and targets.
+
+ANSWER / MEASURED RESULT:
+All static_vars are strictly 2D with shape (720, 1440) (upsampled from 1 deg or
+truncated from 0.25 deg). Surface inputs have shape (1, 2, 180, 360) and atmos inputs
+have shape (1, 2, 13, 180, 360). Single-step targets lack the time axis, with shapes
+(1, 180, 360) and (1, 13, 180, 360) respectively.
+
+SUPERSEDED BY:
+tests/test_shapes.py, which tests ranks and axis ordering offline on synthetic
+fixtures and asserts full native dimensions in a needs_data test.
 """
 
 import os

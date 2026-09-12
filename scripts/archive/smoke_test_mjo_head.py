@@ -1,15 +1,24 @@
 #!/usr/bin/env python
-"""Smoke test for AuroraMJO dual-head wrapper.
+"""Archived: Smoke test for AuroraMJO dual-head wrapper.
 
-Run from repository root with:
+HISTORICAL CONTEXT:
+Verified that the dual-head wrapper (AuroraMJO) constructs properly, passes batches
+through either the backbone only (when mjo_head.enabled=False) or both backbone and
+MJO head MLP (when mjo_head.enabled=True), producing predicted RMM1, RMM2, and Amplitude.
 
-    python scripts/smoke_test_mjo_head.py
+WHAT IT VERIFIED:
+1. MJO head disabled: returns a plain Batch; no MJO head constructed.
+2. MJO head enabled: returns (Batch, Tensor[B, 3]) with finite RMM predictions.
+3. Zero key overlap between backbone and MJO head parameters in state_dict.
 
-The test uses AuroraSmallPretrained so no GPU is required, but you *will*
-need network access to download the small pretrained checkpoint (~200 MB)
-from HuggingFace on first run.  Subsequent runs use the HF cache.
+ANSWER / MEASURED RESULT:
+Both modes confirmed. When enabled=False, model.mjo_head is None and forward returns
+Batch. When enabled=True, forward returns (Batch, Tensor[B, 3]) where elements are
+[RMM1, RMM2, Amplitude], and zero key overlap exists between backbone and head.
 
-Exit code 0 = pass.
+SUPERSEDED BY:
+tests/test_mjo_head.py, which tests head disabling/enabling, (B, 3) output shape,
+finite predictions, and tropical masking completely offline in pytest.
 """
 
 import sys
