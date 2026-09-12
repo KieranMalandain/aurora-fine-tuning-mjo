@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# tools/probe_model_size.py
+# scripts/probe_model_size.py
 """
 Task A3 / FIX 5 — model-size probe (AURORA_MJO_GAMEPLAN §0.3, §PART 2 FIX 5).
 
@@ -38,14 +38,14 @@ Usage (inside your salloc allocation, single GPU is enough for a per-rank
 memory reading — Aurora is data-parallel only, so one rank's peak memory at
 batch_size=1 generalizes directly to every rank in the real 4-GPU job):
 
-    CUDA_VISIBLE_DEVICES=0 python tools/probe_model_size.py --size small \
+    CUDA_VISIBLE_DEVICES=0 python scripts/probe_model_size.py --size small \
         --config configs/unified.yaml --mode baseline --steps 30
-    CUDA_VISIBLE_DEVICES=0 python tools/probe_model_size.py --size huge  \
+    CUDA_VISIBLE_DEVICES=0 python scripts/probe_model_size.py --size huge  \
         --config configs/unified.yaml --mode baseline --steps 30
 
 Then combine both results into the ~2-session decision:
 
-    python tools/probe_model_size.py --decide \
+    python scripts/probe_model_size.py --decide \
         --config configs/unified.yaml --mode baseline
 
 Each `--size` run writes `tools/probe_results/<size>.json`; `--decide` reads
@@ -361,8 +361,8 @@ def decide(cfg: dict, session_hours: float = 3.5):
     if not small_path.exists() or not huge_path.exists():
         missing = [p.name for p in (small_path, huge_path) if not p.exists()]
         print(f"[decide] Missing result file(s): {missing}. Run both sizes first:")
-        print("  python tools/probe_model_size.py --size small --config ... --mode ...")
-        print("  python tools/probe_model_size.py --size huge  --config ... --mode ...")
+        print("  python scripts/probe_model_size.py --size small --config ... --mode ...")
+        print("  python scripts/probe_model_size.py --size huge  --config ... --mode ...")
         sys.exit(1)
 
     small = json.load(open(small_path))

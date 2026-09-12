@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# tools/diagnose_val_nan.py
+# scripts/diagnose_val_nan.py
 """
 One-shot diagnostic for the 100%-non-finite validation losses (handoff §3b).
 
@@ -38,11 +38,11 @@ Stages (each prints PASS/FAIL/FINDINGS):
 Usage on Perlmutter (from the worktree root, aurora_mjo env active):
 
   # The two decisive checks (fast, login node OK, ~5–10 min):
-  python tools/diagnose_val_nan.py --years 2016 2019
+  python scripts/diagnose_val_nan.py --years 2016 2019
   # Compare against a clean train slice:
-  python tools/diagnose_val_nan.py --years 1984 1985 --skip-dataset
+  python scripts/diagnose_val_nan.py --years 1984 1985 --skip-dataset
   # Optional model-side stage on a GPU node:
-  python tools/diagnose_val_nan.py --years 2016 2019 --forward \
+  python scripts/diagnose_val_nan.py --years 2016 2019 --forward \
       --checkpoint checkpoints/baseline/best.pt
 """
 
