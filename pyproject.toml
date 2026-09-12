@@ -58,9 +58,6 @@ target-version = "py310"
 exclude = [
     "src/**",
     "scripts/**",
-    "tools/**",
-    "inspect_vars.py",
-    "test_dataset.py",
     "train.py",
     "*.md",
     "docs/**",
@@ -78,7 +75,6 @@ select = ["E", "F", "I", "UP", "B"]
 "src/aurora_mjo/loss.py" = ["B006", "E501"]
 "src/aurora_mjo/trainer.py" = ["B905"]
 "src/aurora_mjo/model.py" = ["UP038"]
-"inspect_vars.py" = ["E501"]
 
 # TODO(C3): Existing lint findings in scripts/ and tools/ to be resolved during scripts refactoring
 "scripts/compute_rmm.py" = ["F841"]
@@ -89,11 +85,12 @@ select = ["E", "F", "I", "UP", "B"]
 "scripts/smoke_test_freeze.py" = ["F401", "E501", "UP038"]
 "scripts/test_num_workers.py" = ["B023", "B007", "F821", "E722"]
 "scripts/verify_dataset_loader.py" = ["E501"]
-"tools/diagnose_val_nan.py" = ["B007"]
+"scripts/diagnose_val_nan.py" = ["B007"]
+"scripts/inspect_vars.py" = ["E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--strict-markers --ignore=test_dataset.py --ignore=scripts"
+addopts = "--strict-markers --ignore=scripts"
 markers = [
     "needs_data: needs the real CFS ERA5 archive. Excluded from CI.",
     "needs_gpu: needs a CUDA device. Excluded from CI.",
@@ -108,14 +105,10 @@ markers = [
 project-excludes = [
     "scripts/**",
     "slurm_scripts/**",
-    "tools/**",
-    "notebooks/**",
     "src/aurora_mjo/checkpoint.py",
     "src/aurora_mjo/dataset.py",
     "src/aurora_mjo/loss.py",
     "src/aurora_mjo/model.py",
     "src/aurora_mjo/trainer.py",
-    "inspect_vars.py",
-    "test_dataset.py",
     "train.py",
 ]
