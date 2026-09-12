@@ -312,48 +312,34 @@ class ResumableDistributedSampler(DistributedSampler):
 def build_dataloader(cfg: dict, split: str) -> DataLoader:
     """Construct the dataloader for `split` in {"train", "val"}."""
     data_cfg = cfg["data"]
-    use_dummy = data_cfg.get("use_dummy", True)
+    if data_cfg.get("use_dummy", False):
+        raise ValueError(
+            "data.use_dummy=true is no longer supported because src/dummy_dataset.py was removed. "
+            "Use `run.py train --smoke-test` (or `train.py --smoke-test`) for "
+            "synthetic in-process testing."
+        )
 
     rollout_cfg = cfg.get("training", {}).get("rollout", {})
     max_rollout_steps = (
         rollout_cfg.get("max_steps", 1) if rollout_cfg.get("enabled", False) else 1
     )
 
-    if use_dummy:
-        from aurora_mjo.dummy_dataset import (  # TODO(C3): does not exist; C3 owns decision
-            MJODataset,
-            load_and_combine_files,
-        )
+    from aurora_mjo.dataset import LANLMJODataset
+    from aurora_mjo.dataset import collate_fn as collate
 
-        dummy_cfg = data_cfg.get("dummy", {})
-        surface_files = dummy_cfg.get("surface_files", [])
-        pressure_files = dummy_cfg.get("pressure_files", [])
-        static_file = dummy_cfg.get("static_file", "")
-        if not surface_files or not pressure_files or not static_file:
-            raise ValueError("Dummy dataset paths not set in config['data']['dummy'].")
-        surface_ds = load_and_combine_files(surface_files)
-        pressure_ds = load_and_combine_files(pressure_files)
-        dataset = MJODataset(
-            surface_ds, pressure_ds, static_file, max_rollout_steps=max_rollout_steps
-        )
-        collate = MJODataset.collate_fn
-    else:
-        from aurora_mjo.dataset import LANLMJODataset
-        from aurora_mjo.dataset import collate_fn as collate
-
-        real_cfg = data_cfg.get("real", {})
-        years = (
-            real_cfg.get("train_years", [1980, 2015])
-            if split == "train"
-            else real_cfg.get("val_years", [2016, 2019])
-        )
-        dataset = LANLMJODataset(
-            start_year=years[0],
-            end_year=years[1],
-            root_dir=data_cfg.get("root"),
-            slt_path=data_cfg.get("slt_path"),
-            max_rollout_steps=max_rollout_steps,
-        )
+    real_cfg = data_cfg.get("real", {})
+    years = (
+        real_cfg.get("train_years", [1980, 2015])
+        if split == "train"
+        else real_cfg.get("val_years", [2016, 2019])
+    )
+    dataset = LANLMJODataset(
+        start_year=years[0],
+        end_year=years[1],
+        root_dir=data_cfg.get("root"),
+        slt_path=data_cfg.get("slt_path"),
+        max_rollout_steps=max_rollout_steps,
+    )
 
     # v3: representative validation coverage.  With max_val_batches set, the
     # old sequential loader evaluated the SAME first ~N chronological samples

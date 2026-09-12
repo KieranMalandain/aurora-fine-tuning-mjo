@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# tools/repro_ima_matrix.py
+# scripts/probe_ima_matrix.py
 """
 Minimal reproducer + experiment matrix for the activation-checkpointing
 "CUDA illegal memory access" (handoff §2).
@@ -41,10 +41,10 @@ Why these five experiments (ordered by prior x cost):
 Run each experiment as a separate process (a CUDA IMA poisons the context):
 
   for E in 0 1 2 3 4 5; do
-    python tools/repro_ima_matrix.py --exp $E ; echo "E$E exit=$?"
+    python scripts/probe_ima_matrix.py --exp $E ; echo "E$E exit=$?"
   done
   # add --sanitizer to wrap the crashing E0 in compute-sanitizer:
-  compute-sanitizer --tool memcheck python tools/repro_ima_matrix.py --exp 0
+  compute-sanitizer --tool memcheck python scripts/probe_ima_matrix.py --exp 0
 
 Exit code 0 = ran clean, 1 = crashed (caught), other = hard crash.
 """

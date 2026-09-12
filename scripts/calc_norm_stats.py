@@ -22,7 +22,7 @@ agent; only the AURORA_MJO_GAMEPLAN.md description of the diff (FIX 2a) was
 available. This is therefore a from-scratch reconstruction, not a literal
 patch of the real script. It reuses the exact same file-discovery pattern
 already proven working in `src/dataset.py::_collect_var_files` and
-`tools/diagnose_val_nan.py::_collect`, and the ttr/tcwv path/native-name
+`scripts/diagnose_val_nan.py::_collect`, and the ttr/tcwv path/native-name
 pairs match the values already trusted and in use in `configs/unified.yaml`
 (mean=-226.0498/std=49.2158 for ttr, mean=18.2967/std=16.3265 for tcwv) as a
 sanity check once it's run for real on NERSC. **Before trusting the msl

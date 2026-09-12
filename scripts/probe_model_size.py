@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# tools/probe_model_size.py
+# scripts/probe_model_size.py
 """
 Task A3 / FIX 5 — model-size probe (AURORA_MJO_GAMEPLAN §0.3, §PART 2 FIX 5).
 
@@ -17,7 +17,7 @@ Why this can't just reuse `train.py --smoke-test`
 `train.py`'s smoke-test loader is deliberately TINY (H=64, W=128) - it only
 exists to catch pipeline/shape bugs in ~seconds, not to measure real memory
 or throughput. This probe instead builds a synthetic batch at PRODUCTION
-resolution (720x1440), matching `tools/repro_ima_matrix.py`'s
+resolution (720x1440), matching `scripts/probe_ima_matrix.py`'s
 `make_synth_batch` pattern, and - unlike that script - goes through the
 REAL `src/model.py::load_model()` / `freeze_backbone()` path so the
 measured trainable-parameter footprint, LoRA insertion, norm-stats
@@ -31,21 +31,21 @@ IMPORTANT — run each size as a SEPARATE PROCESS
 =================================================
 A CUDA OOM (or worse, an illegal-memory-access) can poison the whole CUDA
 context for the rest of the process, same reasoning as
-`tools/repro_ima_matrix.py`. Don't loop over both sizes in one Python
+`scripts/probe_ima_matrix.py`. Don't loop over both sizes in one Python
 process; run this script twice.
 
 Usage (inside your salloc allocation, single GPU is enough for a per-rank
 memory reading — Aurora is data-parallel only, so one rank's peak memory at
 batch_size=1 generalizes directly to every rank in the real 4-GPU job):
 
-    CUDA_VISIBLE_DEVICES=0 python tools/probe_model_size.py --size small \
+    CUDA_VISIBLE_DEVICES=0 python scripts/probe_model_size.py --size small \
         --config configs/unified.yaml --mode baseline --steps 30
-    CUDA_VISIBLE_DEVICES=0 python tools/probe_model_size.py --size huge  \
+    CUDA_VISIBLE_DEVICES=0 python scripts/probe_model_size.py --size huge  \
         --config configs/unified.yaml --mode baseline --steps 30
 
 Then combine both results into the ~2-session decision:
 
-    python tools/probe_model_size.py --decide \
+    python scripts/probe_model_size.py --decide \
         --config configs/unified.yaml --mode baseline
 
 Each `--size` run writes `tools/probe_results/<size>.json`; `--decide` reads
@@ -177,12 +177,12 @@ def run_probe(size: str, cfg: dict, steps: int, warmup: int) -> dict:
     model_cfg["model_type"] = size  # "huge" -> full Aurora, else -> small
     if model_cfg.get("gradient_checkpointing", False):
         # Gameplan explicitly says not to enable this casually (known IMA,
-        # handoff §2 / repro_ima_matrix.py). Force it off for the probe
+        # handoff §2 / probe_ima_matrix.py). Force it off for the probe
         # regardless of what's in the config, and say so loudly.
         print(
             "[probe] WARNING: gradient_checkpointing=true in config — "
             "forcing OFF for this probe (known IMA risk; see FIX 5 / "
-            "tools/repro_ima_matrix.py). Re-enable only after that "
+            "scripts/probe_ima_matrix.py). Re-enable only after that "
             "matrix finds a crash-free configuration."
         )
         model_cfg["gradient_checkpointing"] = False
@@ -361,8 +361,8 @@ def decide(cfg: dict, session_hours: float = 3.5):
     if not small_path.exists() or not huge_path.exists():
         missing = [p.name for p in (small_path, huge_path) if not p.exists()]
         print(f"[decide] Missing result file(s): {missing}. Run both sizes first:")
-        print("  python tools/probe_model_size.py --size small --config ... --mode ...")
-        print("  python tools/probe_model_size.py --size huge  --config ... --mode ...")
+        print("  python scripts/probe_model_size.py --size small --config ... --mode ...")
+        print("  python scripts/probe_model_size.py --size huge  --config ... --mode ...")
         sys.exit(1)
 
     small = json.load(open(small_path))

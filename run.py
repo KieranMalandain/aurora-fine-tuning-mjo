@@ -4,18 +4,20 @@
 Commands:
   train        - Fine-tune Aurora for MJO prediction
   show-config  - Resolve and print canonical JSON configuration
-
-Note: `evaluate` and `norm-stats` commands are planned for task C3.
+  evaluate     - Evaluate MJO forecast skill across lead times
+  norm-stats   - Compute normalization statistics over training years
 """
 
 from __future__ import annotations
 
 import logging
+import subprocess
 import sys
 from pathlib import Path
 
 import typer
 
+from aurora_mjo.checkpoint import CheckpointManager
 from aurora_mjo.cli_support import (
     apply_overrides,
     load_config,
@@ -95,6 +97,124 @@ def show_config(
     if override:
         cfg = apply_overrides(cfg, override)
     print_config(cfg)
+
+
+@app.command()
+def evaluate(
+    config: Path = typer.Option(
+        Path("configs/unified.yaml"),
+        "--config",
+        help="Path to YAML config.",
+    ),
+    mode: str = typer.Option(
+        ...,
+        "--mode",
+        help="Mode overlay to evaluate (required for unified configs).",
+    ),
+    checkpoint: str = typer.Option(
+        "latest",
+        "--checkpoint",
+        help="'latest' or explicit path to model checkpoint.",
+    ),
+    targets: Path = typer.Option(
+        Path("data/rmm_targets.nc"),
+        "--targets",
+        help="Path to rmm_targets.nc.",
+    ),
+    basis: Path = typer.Option(
+        Path("data/rmm_basis.npz"),
+        "--basis",
+        help="Path to rmm_basis.npz.",
+    ),
+    out_dir: Path = typer.Option(
+        Path("evaluation/mjo_skill"),
+        "--out-dir",
+        help="Directory to write evaluation outputs.",
+    ),
+    smoke_test: bool = typer.Option(
+        False,
+        "--smoke-test",
+        help="Run synthetic smoke test without checkpoint or data.",
+    ),
+) -> None:
+    """Evaluate MJO prediction skill across lead times."""
+    if smoke_test:
+        cmd = [sys.executable, "scripts/evaluate_mjo.py", "--smoke-test"]
+        res = subprocess.run(cmd)
+        if res.returncode != 0:
+            raise typer.Exit(code=res.returncode)
+        return
+
+    ckpt_path: Path | None = None
+    if checkpoint == "latest":
+        cfg = load_config(str(config), mode)
+        save_dir = cfg.get("checkpointing", {}).get("save_dir", f"checkpoints/{mode}")
+        ckpt_path = CheckpointManager.find_latest(save_dir)
+        if ckpt_path is None:
+            typer.echo(
+                f"No checkpoint found in save_dir '{save_dir}'. "
+                f"Run scripts/evaluate_mjo.py directly with an explicit checkpoint:\n"
+                f"  uv run python scripts/evaluate_mjo.py --config {config} --mode {mode} "
+                f"--checkpoint <path/to/checkpoint.pt>",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+    else:
+        ckpt_path = Path(checkpoint)
+        if not ckpt_path.exists():
+            typer.echo(
+                f"Checkpoint not found: {ckpt_path}. "
+                f"Run scripts/evaluate_mjo.py directly with valid paths:\n"
+                f"  uv run python scripts/evaluate_mjo.py --config {config} --mode {mode} "
+                f"--checkpoint <path>",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+    cmd = [
+        sys.executable,
+        "scripts/evaluate_mjo.py",
+        "--config",
+        str(config),
+        "--mode",
+        mode,
+        "--checkpoint",
+        str(ckpt_path),
+        "--targets",
+        str(targets),
+        "--basis",
+        str(basis),
+        "--out-dir",
+        str(out_dir),
+    ]
+    res = subprocess.run(cmd)
+    if res.returncode != 0:
+        raise typer.Exit(code=res.returncode)
+
+
+@app.command("norm-stats")
+def norm_stats(
+    years: tuple[int, int] = typer.Option(
+        (1980, 2015),
+        "--years",
+        help="Start and end years for training statistics.",
+    ),
+    config: Path = typer.Option(
+        Path("configs/unified.yaml"),
+        "--config",
+        help="Path to YAML config.",
+    ),
+) -> None:
+    """Compute normalization statistics over training years."""
+    years_str = f"{years[0]} {years[1]}"
+    typer.echo(
+        "run.py norm-stats logic is hosted in scripts/calc_norm_stats.py "
+        "(not yet extracted into aurora_mjo to keep scripts run-only).\n"
+        f"Please run directly:\n"
+        f"  uv run python scripts/calc_norm_stats.py --config {config} --years {years_str}",
+        err=True,
+    )
+    raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":
