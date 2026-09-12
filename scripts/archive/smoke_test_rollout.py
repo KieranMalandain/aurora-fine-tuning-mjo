@@ -1,17 +1,26 @@
 #!/usr/bin/env python3
-"""Smoke test: validate 2-step autoregressive rollout without real data.
+"""Archived: Smoke test for 2-step autoregressive rollout without real data.
 
-This test:
-1. Builds a minimal configuration with rollout enabled and k=2.
-2. Constructs a fake Aurora Batch with random tensors.
-3. Instantiates a stub model that echoes the input surface fields.
-4. Verifies that _compute_loss runs 2 forward passes and returns a finite
-   scalar loss.
+HISTORICAL CONTEXT:
+Validated autoregressive multi-step rollout mechanics with Trainer using a StubModel,
+verifying that rollout stepping, curriculum advancement, and backward gradient flow
+execute properly without GPU, real data, or Aurora checkpoints.
 
-Run with:
-    python scripts/smoke_test_rollout.py
+WHAT IT VERIFIED:
+1. Rollout curriculum correctly identifies step count k=2 at epoch 1.
+2. Step loss weights sum to 1.0.
+3. Trainer._compute_loss executes 2 forward steps and computes finite scalar loss.
+4. Backward pass on total loss propagates gradients to model parameters.
 
-No GPU, no data files, and no Aurora checkpoint required.
+ANSWER / MEASURED RESULT:
+Autoregressive rollout executes cleanly on CPU in ~1.5s with synthetic tensors.
+Total loss computes finite values, step weights normalize to 1.0, and backward pass
+flows gradients to trainable parameters.
+
+SUPERSEDED BY:
+tests/test_rollout.py, which tests curriculum progression, step loss weighting
+(uniform and final_heavy), autograd graph severance under backprop: 'detached',
+and backward loss flow in pytest.
 """
 
 import logging

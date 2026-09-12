@@ -50,11 +50,13 @@ def main():
         print(f"  {k}: shape={v.shape}")
 
     print("\n--- Output Surface Variables ---")
-    for k, v in surf_out.items():
+    surf_dict = surf_out[0] if isinstance(surf_out, list) else surf_out
+    for k, v in surf_dict.items():
         print(f"  {k}: shape={v.shape}")
 
     print("\n--- Output Atmos Variables ---")
-    for k, v in atmos_out.items():
+    atmos_dict = atmos_out[0] if isinstance(atmos_out, list) else atmos_out
+    for k, v in atmos_dict.items():
         print(f"  {k}: shape={v.shape}")
 
     print("\nVerification completed successfully.")
