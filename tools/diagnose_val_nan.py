@@ -240,7 +240,7 @@ def stage3_dataset(args, problems: list):
     print("=" * 78)
     import torch
 
-    from src.dataset import LANLMJODataset
+    from aurora_mjo.dataset import LANLMJODataset
 
     ds = LANLMJODataset(
         start_year=args.years[0],
@@ -294,15 +294,15 @@ def stage4_forward(args, problems: list):
     import torch
     import yaml
 
-    from src.dataset import LANLMJODataset
-    from src.model import load_model
-    from src.trainer import Trainer, build_dataloader  # noqa
+    from aurora_mjo.dataset import LANLMJODataset
+    from aurora_mjo.model import load_model
+    from aurora_mjo.trainer import Trainer, build_dataloader  # noqa
 
     cfg = yaml.safe_load(open(args.config))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = load_model(cfg.get("model", {}), device)
     if args.checkpoint:
-        from src.checkpoint import CheckpointManager
+        from aurora_mjo.checkpoint import CheckpointManager
 
         CheckpointManager.load(args.checkpoint, model)
     model.eval()
@@ -312,7 +312,7 @@ def stage4_forward(args, problems: list):
         root_dir=args.root,
         slt_path=args.slt,
     )
-    from src.trainer import _align_shapes, _upsample_batch_gpu
+    from aurora_mjo.trainer import _align_shapes, _upsample_batch_gpu
 
     in_b, s_t, a_t = ds[0]
     in_b, tgts = _upsample_batch_gpu(in_b, s_t, a_t, device)
@@ -360,7 +360,7 @@ def main():
     ap.add_argument("--checkpoint", default=None)
     args = ap.parse_args()
 
-    from src.dataset import ATMOS_VAR_MAP, SURFACE_VAR_MAP
+    from aurora_mjo.dataset import ATMOS_VAR_MAP, SURFACE_VAR_MAP
 
     root = Path(args.root)
     fmap = {

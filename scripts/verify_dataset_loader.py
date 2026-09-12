@@ -4,7 +4,7 @@ import warnings
 # Suppress xarray/netcdf warnings for clean output
 warnings.filterwarnings("ignore")
 
-from src.dataset import LANLMJODataset
+from aurora_mjo.dataset import LANLMJODataset
 
 
 def main():

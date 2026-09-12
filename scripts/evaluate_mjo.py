@@ -892,7 +892,7 @@ def _load_model_and_config(args: argparse.Namespace):
     import torch
     import yaml
 
-    from src.model import load_model
+    from aurora_mjo.model import load_model
 
     if args.config is None or not args.config.exists():
         raise FileNotFoundError(
@@ -956,7 +956,7 @@ def main() -> None:
 
     # ---- Build dataloader (val split only) ----
     # Import locally to avoid hard dependency when running smoke-test
-    from src.trainer import build_dataloader
+    from aurora_mjo.trainer import build_dataloader
 
     val_loader = build_dataloader(
         cfg, split=args.split if args.split == "val" else "val"

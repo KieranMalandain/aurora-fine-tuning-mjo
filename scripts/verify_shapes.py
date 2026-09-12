@@ -31,7 +31,7 @@ def main():
     print("=" * 60)
 
     # Instantiate dataset with a small year range (just 1 year for speed)
-    from src.dataset import LANLMJODataset
+    from aurora_mjo.dataset import LANLMJODataset
 
     ds = LANLMJODataset(
         start_year=2016,

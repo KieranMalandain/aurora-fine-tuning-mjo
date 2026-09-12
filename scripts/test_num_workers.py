@@ -11,7 +11,7 @@ os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 
 from torch.utils.data import DataLoader
 
-from src.dataset import LANLMJODataset, collate_fn
+from aurora_mjo.dataset import LANLMJODataset, collate_fn
 
 BATCHES = 4
 TIMEOUT = 90

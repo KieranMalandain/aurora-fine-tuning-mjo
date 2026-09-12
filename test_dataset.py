@@ -5,7 +5,7 @@ import warnings
 warnings.filterwarnings("ignore")
 
 try:
-    from src.dataset import LANLMJODataset
+    from aurora_mjo.dataset import LANLMJODataset
 
     # Provide root_dir explicitly to avoid the default warning
     # and restrict to a single year to speed up the lazy loading test.
