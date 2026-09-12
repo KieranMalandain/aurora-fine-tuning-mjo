@@ -222,12 +222,13 @@ NONE.
 
 ```text
 8bf2457  feat(test): convert smoke and verify scripts to pytest modules (task D2)
-<current>  docs(campaign): record task D2 completion results in D2_result.md
+26daf98  docs(campaign): record task D2 completion results in D2_result.md
 ```
 
 ## 10. Files changed
 
 ```text
+ docs/campaigns/refactor/results/D2_result.md | 245 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
  scripts/{ => archive}/scan_for_bad_values.py |  34 ++++++++++++++++-----------
  scripts/{ => archive}/smoke_test_freeze.py   |  47 +++++++++++++++++++++++--------------
  scripts/{ => archive}/smoke_test_mjo_head.py |  31 +++++++++++++++---------
@@ -240,6 +241,5 @@ NONE.
  tests/test_mjo_head.py                       | 168 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
  tests/test_rollout.py                        | 350 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
  tests/test_shapes.py                         | 135 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
- docs/campaigns/refactor/results/D2_result.md  | 270 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
- 13 files changed, 1565 insertions(+), 62 deletions(-)
+ 13 files changed, 1540 insertions(+), 62 deletions(-)
 ```
