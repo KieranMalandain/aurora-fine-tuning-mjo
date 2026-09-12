@@ -1,31 +1,47 @@
-"""CLI support and configuration utilities for aurora_mjo.
+"""Runtime orchestration, memory scaling, and smoke-test helpers for aurora_mjo.
 
-NOTE: This module is a deliberate way-station, not a permanent home.
-The pure config-loading half of this will move into `config.py` in E2,
-when it becomes a validated `Config` object (see docs/campaigns/refactor/tasks/E2_config_object.md).
-E2 owns `config.py`.
+NOTE: Pure config loading, validation, and schema definitions moved into `config.py` in E2.
+This module now hosts runtime execution (`run_train`), seed initialization,
+GPU memory auto-scaling (`auto_scale_memory`), and synthetic smoke-test harness helpers.
+Config helpers (`load_config`, `apply_overrides`, `print_config`, `_deep_merge`) are re-exported
+from `aurora_mjo.config` for backward compatibility.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import random
 import sys
-from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
 import torch.distributed as dist
-import yaml
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from aurora_mjo.checkpoint import CheckpointManager
+from aurora_mjo.config import (
+    Config,
+    _deep_merge,
+    apply_overrides,
+    load_config,
+    print_config,
+)
 from aurora_mjo.model import load_model
 from aurora_mjo.trainer import Trainer
+
+__all__ = [
+    "Config",
+    "_deep_merge",
+    "apply_overrides",
+    "auto_scale_memory",
+    "load_config",
+    "print_config",
+    "run_train",
+    "seed_everything",
+]
 
 # Workaround for NERSC Errno 524 filelock issue with huggingface_hub, and
 # make the HF cache PERSISTENT: /tmp is node-local and wiped, which forced
@@ -68,57 +84,6 @@ if "NERSC_HOST" in os.environ:
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 log = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Config helpers
-# ---------------------------------------------------------------------------
-
-
-def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
-    """Recursively merge `overlay` into a copy of `base` (overlay wins)."""
-    out = deepcopy(base)
-    for k, v in (overlay or {}).items():
-        if isinstance(v, dict) and isinstance(out.get(k), dict):
-            out[k] = _deep_merge(out[k], v)
-        else:
-            out[k] = deepcopy(v)
-    return out
-
-
-def load_config(path: str | Path, mode: str | None) -> dict[str, Any]:
-    with open(path) as f:
-        raw = yaml.safe_load(f)
-    log.info(f"Loaded config: {path}")
-
-    if "modes" in raw:
-        modes = raw.pop("modes")
-        if mode is None:
-            raise SystemExit(
-                f"--mode is required with a unified config (available: {list(modes)})"
-            )
-        if mode not in modes:
-            raise SystemExit(f"Unknown mode {mode!r}; available: {list(modes)}")
-        cfg = _deep_merge(raw, modes[mode])
-        cfg.setdefault("experiment", {})["mode"] = mode
-        log.info(f"Applied mode overlay: {mode}")
-        return cfg
-    return raw  # legacy single-experiment config still works
-
-
-def apply_overrides(cfg: dict[str, Any], overrides: list[str]) -> dict[str, Any]:
-    for override in overrides:
-        if "=" not in override:
-            raise ValueError(f"Invalid override (expected key=value): {override!r}")
-        key_path, raw_value = override.split("=", 1)
-        keys = key_path.strip().split(".")
-        value = yaml.safe_load(raw_value)
-        node = cfg
-        for k in keys[:-1]:
-            node = node.setdefault(k, {})
-        node[keys[-1]] = value
-        log.info(f"Override: {key_path} = {value!r}")
-    return cfg
 
 
 def seed_everything(seed: int) -> None:
@@ -258,13 +223,13 @@ def _install_smoke_test_loader(cfg: dict[str, Any], device: torch.device) -> tup
 # ---------------------------------------------------------------------------
 
 
-def print_config(cfg: dict[str, Any]) -> None:
-    """Print canonical JSON (sorted keys, indent 2) to stdout."""
-    print(json.dumps(cfg, indent=2, sort_keys=True))
+def run_train(
+    cfg: dict[str, Any] | Config, resume: str = "auto", smoke_test: bool = False
+) -> int:
+    """Execute training run given a resolved config dict or Config object."""
+    if isinstance(cfg, Config):
+        cfg = cfg.to_dict()
 
-
-def run_train(cfg: dict[str, Any], resume: str = "auto", smoke_test: bool = False) -> int:
-    """Execute training run given a resolved config dict."""
     # 1. DDP setup (no-op when launched without torchrun)
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
     world_size = int(os.environ.get("WORLD_SIZE", 1))
