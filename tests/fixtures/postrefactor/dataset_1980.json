@@ -1,0 +1,374 @@
+{
+  "all_warnings": [
+    "RuntimeWarning: numpy.ndarray size changed, may indicate binary incompatibility. Expected 16 from C header, got 96 from PyObject"
+  ],
+  "end_year": 1980,
+  "expected_length": 1462,
+  "length": 1462,
+  "length_matches_expected": true,
+  "plev_indices": [
+    0,
+    2,
+    4,
+    6,
+    8,
+    9,
+    11,
+    13,
+    15,
+    17,
+    22,
+    25,
+    28
+  ],
+  "sample_0": {
+    "atmospheric_vars": {
+      "q": {
+        "dtype": "torch.float32",
+        "finite_fraction": 1.0,
+        "max": 0.020207393914461136,
+        "mean": 0.0016507721738889813,
+        "min": 7.80337643391249e-07,
+        "shape": [
+          1,
+          2,
+          13,
+          180,
+          360
+        ]
+      },
+      "t": {
+        "dtype": "torch.float32",
+        "finite_fraction": 1.0,
+        "max": 313.6925354003906,
+        "mean": 242.6278076171875,
+        "min": 184.59030151367188,
+        "shape": [
+          1,
+          2,
+          13,
+          180,
+          360
+        ]
+      },
+      "u": {
+        "dtype": "torch.float32",
+        "finite_fraction": 1.0,
+        "max": 93.82754516601562,
+        "mean": 7.131857872009277,
+        "min": -41.23377990722656,
+        "shape": [
+          1,
+          2,
+          13,
+          180,
+          360
+        ]
+      },
+      "v": {
+        "dtype": "torch.float32",
+        "finite_fraction": 1.0,
+        "max": 72.65070343017578,
+        "mean": 0.06154272332787514,
+        "min": -57.049827575683594,
+        "shape": [
+          1,
+          2,
+          13,
+          180,
+          360
+        ]
+      },
+      "z": {
+        "dtype": "torch.float32",
+        "finite_fraction": 1.0,
+        "max": 203649.09375,
+        "mean": 77573.4296875,
+        "min": -3697.12353515625,
+        "shape": [
+          1,
+          2,
+          13,
+          180,
+          360
+        ]
+      }
+    },
+    "metadata_init_time": "1980-01-01 06:00:00",
+    "sample_index": 0,
+    "surface_vars": {
+      "10u": {
+        "dtype": "torch.float32",
+        "finite_fraction": 1.0,
+        "max": 20.708473205566406,
+        "mean": -0.15574251115322113,
+        "min": -21.355358123779297,
+        "shape": [
+          1,
+          2,
+          180,
+          360
+        ]
+      },
+      "10v": {
+        "dtype": "torch.float32",
+        "finite_fraction": 1.0,
+        "max": 22.385610580444336,
+        "mean": -0.19823715090751648,
+        "min": -19.573814392089844,
+        "shape": [
+          1,
+          2,
+          180,
+          360
+        ]
+      },
+      "2t": {
+        "dtype": "torch.float32",
+        "finite_fraction": 1.0,
+        "max": 312.9109191894531,
+        "mean": 276.3276062011719,
+        "min": 218.1384735107422,
+        "shape": [
+          1,
+          2,
+          180,
+          360
+        ]
+      },
+      "msl": {
+        "dtype": "torch.float32",
+        "finite_fraction": 1.0,
+        "max": 104931.8046875,
+        "mean": 96826.796875,
+        "min": 51185.6328125,
+        "shape": [
+          1,
+          2,
+          180,
+          360
+        ]
+      },
+      "tcwv": {
+        "dtype": "torch.float32",
+        "finite_fraction": 1.0,
+        "max": 64.72994232177734,
+        "mean": 16.93798065185547,
+        "min": 0.3297196924686432,
+        "shape": [
+          1,
+          2,
+          180,
+          360
+        ]
+      },
+      "ttr": {
+        "dtype": "torch.float32",
+        "finite_fraction": 1.0,
+        "max": -95.39114379882812,
+        "mean": -225.3809051513672,
+        "min": -346.7436218261719,
+        "shape": [
+          1,
+          2,
+          180,
+          360
+        ]
+      }
+    }
+  },
+  "sample_last": {
+    "atmospheric_vars": {
+      "q": {
+        "dtype": "torch.float32",
+        "finite_fraction": 1.0,
+        "max": 0.02063470333814621,
+        "mean": 0.0016483659856021404,
+        "min": 8.087367859843653e-07,
+        "shape": [
+          1,
+          2,
+          13,
+          180,
+          360
+        ]
+      },
+      "t": {
+        "dtype": "torch.float32",
+        "finite_fraction": 1.0,
+        "max": 318.11297607421875,
+        "mean": 242.41973876953125,
+        "min": 184.79678344726562,
+        "shape": [
+          1,
+          2,
+          13,
+          180,
+          360
+        ]
+      },
+      "u": {
+        "dtype": "torch.float32",
+        "finite_fraction": 1.0,
+        "max": 106.21266174316406,
+        "mean": 7.0522871017456055,
+        "min": -37.7365608215332,
+        "shape": [
+          1,
+          2,
+          13,
+          180,
+          360
+        ]
+      },
+      "v": {
+        "dtype": "torch.float32",
+        "finite_fraction": 1.0,
+        "max": 68.82842254638672,
+        "mean": 0.05651453137397766,
+        "min": -52.958187103271484,
+        "shape": [
+          1,
+          2,
+          13,
+          180,
+          360
+        ]
+      },
+      "z": {
+        "dtype": "torch.float32",
+        "finite_fraction": 1.0,
+        "max": 203697.5,
+        "mean": 77510.0,
+        "min": -3913.44921875,
+        "shape": [
+          1,
+          2,
+          13,
+          180,
+          360
+        ]
+      }
+    },
+    "metadata_init_time": "1980-12-31 12:00:00",
+    "sample_index": 1461,
+    "surface_vars": {
+      "10u": {
+        "dtype": "torch.float32",
+        "finite_fraction": 1.0,
+        "max": 22.434326171875,
+        "mean": -0.2588441073894501,
+        "min": -19.221668243408203,
+        "shape": [
+          1,
+          2,
+          180,
+          360
+        ]
+      },
+      "10v": {
+        "dtype": "torch.float32",
+        "finite_fraction": 1.0,
+        "max": 18.146696090698242,
+        "mean": -0.1983487457036972,
+        "min": -23.863473892211914,
+        "shape": [
+          1,
+          2,
+          180,
+          360
+        ]
+      },
+      "2t": {
+        "dtype": "torch.float32",
+        "finite_fraction": 1.0,
+        "max": 318.0723571777344,
+        "mean": 276.8636779785156,
+        "min": 224.16493225097656,
+        "shape": [
+          1,
+          2,
+          180,
+          360
+        ]
+      },
+      "msl": {
+        "dtype": "torch.float32",
+        "finite_fraction": 1.0,
+        "max": 104283.5546875,
+        "mean": 96751.296875,
+        "min": 52166.62890625,
+        "shape": [
+          1,
+          2,
+          180,
+          360
+        ]
+      },
+      "tcwv": {
+        "dtype": "torch.float32",
+        "finite_fraction": 1.0,
+        "max": 64.192626953125,
+        "mean": 16.987581253051758,
+        "min": 0.18799100816249847,
+        "shape": [
+          1,
+          2,
+          180,
+          360
+        ]
+      },
+      "ttr": {
+        "dtype": "torch.float32",
+        "finite_fraction": 1.0,
+        "max": -94.8436279296875,
+        "mean": -225.0914764404297,
+        "min": -402.33551025390625,
+        "shape": [
+          1,
+          2,
+          180,
+          360
+        ]
+      }
+    }
+  },
+  "start_year": 1980,
+  "static_variables": {
+    "lsm": {
+      "finite_fraction": 1.0,
+      "max": 1.0,
+      "mean": 0.3356685936450958,
+      "min": 0.0,
+      "shape": [
+        720,
+        1440
+      ],
+      "std": 0.4484005272388458
+    },
+    "slt": {
+      "finite_fraction": 1.0,
+      "max": 7.0,
+      "mean": 0.6707561612129211,
+      "min": 0.0,
+      "shape": [
+        720,
+        1440
+      ],
+      "std": 1.168187141418457
+    },
+    "z": {
+      "finite_fraction": 1.0,
+      "max": 52498.9609375,
+      "mean": 3709.24658203125,
+      "min": -286.9736328125,
+      "shape": [
+        720,
+        1440
+      ],
+      "std": 8216.380859375
+    }
+  },
+  "using_zeros_warning_emitted": false,
+  "using_zeros_warnings": []
+}
