@@ -10,15 +10,20 @@ Commands:
 
 from __future__ import annotations
 
-import logging
-import subprocess
-import sys
-from pathlib import Path
+# Process-start environment configuration must execute before C-libraries initialise.
+from aurora_mjo.env import configure_environment  # isort: skip
 
-import typer
+configure_environment()
 
-from aurora_mjo.checkpoint import CheckpointManager
-from aurora_mjo.cli_support import (
+import logging  # noqa: E402
+import subprocess  # noqa: E402
+import sys  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+import typer  # noqa: E402
+
+from aurora_mjo.checkpoint import CheckpointManager  # noqa: E402
+from aurora_mjo.cli_support import (  # noqa: E402
     apply_overrides,
     load_config,
     print_config,

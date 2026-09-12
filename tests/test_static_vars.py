@@ -13,9 +13,11 @@ Background:
     If locking failed during earlier training runs, the model may have trained on a
     planet with zero topography and zero land-sea contrast without raising an error.
 
-    Task E1 will make missing/unreadable static variables a hard failure. This test module
-    documents and locks the CURRENT behaviour, including the zero-substitution fallback
-    that E1 will invert, ensuring the test suite captures the transition explicitly.
+    Task E1 makes missing/unreadable static variables a hard failure (StaticVarLoadError).
+    Earlier versions caught Exception and substituted all-zeros with a UserWarning, risking
+    silent physics degradation (a planet with no topography and no continents, emitting only
+    two warnings in an 11-hour log). docs/findings/2026-09-zeroed-statics.md (task B2)
+    records whether that fallback ever fired in production.
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ import torch
 import xarray as xr
 
 from aurora_mjo.dataset import LANLMJODataset
+from aurora_mjo.env import StaticVarLoadError
 
 REAL_CFS_ROOT = Path(
     "/global/cfs/cdirs/m4946/xiaoming/zm4946.MachLearn/PrcsPrep/prcs.ERA5/prcs.ERA5.Remap/Results"
@@ -140,34 +143,85 @@ def test_clean_zeroes_nan_and_inf_across_all_three_statics(
         assert not torch.isinf(tensor).any(), f"Static '{var_name}' retained Infs after _clean!"
 
 
-def test_current_zero_fallback_on_unreadable_invariant(
+def test_hard_fail_on_unreadable_invariant_z(
     synthetic_dataset: LANLMJODataset, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Assert current fallback substitutes zero tensor and warns with 'Using zeros'.
+    """Assert unreadable invariant Z raises StaticVarLoadError rather than substituting zeros.
 
-    CURRENT BEHAVIOUR (WRONG / TEMPORARY):
-    Lesson 4 warns that swallowing load exceptions and substituting zeros hides
-    underlying I/O and file locking failures, causing silent physics degradation.
-    Task E1 will turn this into a hard exception (raising FileNotFoundError or OSError).
-    WHEN TASK E1 IMPLEMENTS THE FIX, THIS TEST MUST BE INVERTED TO ASSERT THAT AN
-    EXCEPTION IS RAISED INSTEAD OF RETURNING ZEROS.
+    History (Lesson 4):
+    Earlier versions caught Exception and substituted an all-zeros tensor with a UserWarning.
+    If locking failed during earlier training runs, the model may have trained on a planet
+    with zero topography while emitting only two warnings in an 11-hour log.
+    Task E1 inverts this fallback into a hard failure chaining the underlying error and
+    recommending HDF5_USE_FILE_LOCKING=FALSE.
     """
     real_open = xr.open_dataset
 
     def mock_open_failing_z(path: Any, *args: Any, **kwargs: Any) -> Any:
         if "_z." in str(path):
-            raise OSError("NetCDF: HDF error: advisory locking failed")
+            raise OSError("[Errno -101] NetCDF: HDF error: advisory locking failed")
         return real_open(path, *args, **kwargs)
 
     monkeypatch.setattr(xr, "open_dataset", mock_open_failing_z)
 
-    with pytest.warns(UserWarning, match=r"Using zeros"):
-        statics = synthetic_dataset._load_static_vars()
+    with pytest.raises(StaticVarLoadError) as exc_info:
+        synthetic_dataset._load_static_vars()
 
-    # Current behaviour: z is substituted with all-zeros tensor
-    z_tensor = statics["z"]
-    assert z_tensor.shape == (720, 1440)
-    assert (z_tensor == 0.0).all(), "Current fallback must substitute all zeros"
+    err_msg = str(exc_info.value)
+    assert "invariant variable 'z'" in err_msg
+    assert "_z." in err_msg
+    assert "HDF5_USE_FILE_LOCKING=FALSE" in err_msg
+    assert exc_info.value.__cause__ is not None
+    assert "NetCDF: HDF error" in str(exc_info.value.__cause__)
+
+
+def test_hard_fail_on_unreadable_invariant_lsm(
+    synthetic_dataset: LANLMJODataset, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Assert unreadable invariant LSM raises StaticVarLoadError rather than substituting zeros."""
+    real_open = xr.open_dataset
+
+    def mock_open_failing_lsm(path: Any, *args: Any, **kwargs: Any) -> Any:
+        if "_lsm." in str(path):
+            raise OSError("[Errno -101] NetCDF: HDF error: advisory locking failed")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(xr, "open_dataset", mock_open_failing_lsm)
+
+    with pytest.raises(StaticVarLoadError) as exc_info:
+        synthetic_dataset._load_static_vars()
+
+    err_msg = str(exc_info.value)
+    assert "invariant variable 'lsm'" in err_msg
+    assert "_lsm." in err_msg
+    assert "HDF5_USE_FILE_LOCKING=FALSE" in err_msg
+    assert exc_info.value.__cause__ is not None
+    assert "NetCDF: HDF error" in str(exc_info.value.__cause__)
+
+
+def test_hard_fail_on_unreadable_static_slt(
+    synthetic_dataset: LANLMJODataset, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Assert unreadable static SLT raises StaticVarLoadError with contextual details."""
+    real_open = xr.open_dataset
+
+    def mock_open_failing_slt(path: Any, *args: Any, **kwargs: Any) -> Any:
+        if "slt" in str(path):
+            raise OSError("I/O failure reading soil type")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(xr, "open_dataset", mock_open_failing_slt)
+
+    with pytest.raises(StaticVarLoadError) as exc_info:
+        synthetic_dataset._load_static_vars()
+
+    err_msg = str(exc_info.value)
+    assert "static soil type 'slt'" in err_msg
+    assert "slt" in err_msg
+    assert "/pscratch" in err_msg
+    assert "download_slt.py" in err_msg
+    assert "HDF5_USE_FILE_LOCKING=FALSE" in err_msg
+    assert exc_info.value.__cause__ is not None
 
 
 def test_synthetic_z_mean_far_from_zero(synthetic_dataset: LANLMJODataset) -> None:
@@ -198,3 +252,20 @@ def test_real_cfs_z_mean_matches_prior() -> None:
     # Prior from 03_DOMAIN_PRIORS.md §3 is 3709.2466 m^2/s^2
     assert abs(z_mean - 3709.2466) < 50.0, f"Real Z mean {z_mean:.4f} != prior 3709.2466"
     assert z_mean > 3000.0, "Real Z mean must be far from zero"
+
+
+@pytest.mark.needs_data
+def test_real_cfs_static_vars_load_correctly() -> None:
+    """Assert all three static variables load correctly from real CFS archive without error."""
+    if not REAL_CFS_ROOT.exists():
+        pytest.skip(f"Real CFS archive not mounted at {REAL_CFS_ROOT}")
+    ds = object.__new__(LANLMJODataset)
+    ds.root_dir = REAL_CFS_ROOT
+    ds.slt_path = Path("/pscratch/sd/k/kam352/Aurora/slt/slt_data.nc")
+    statics = ds._load_static_vars()
+    assert statics["z"].shape == (720, 1440)
+    assert statics["lsm"].shape == (720, 1440)
+    assert statics["slt"].shape == (720, 1440)
+    assert torch.isfinite(statics["z"]).all()
+    assert torch.isfinite(statics["lsm"]).all()
+    assert torch.isfinite(statics["slt"]).all()

@@ -53,6 +53,8 @@ import xarray as xr
 from aurora import Batch, Metadata
 from torch.utils.data import Dataset
 
+from aurora_mjo.env import StaticVarLoadError
+
 _DEFAULT_NERSC_ROOT = "/global/cfs/cdirs/m4946/xiaoming/zm4946.MachLearn/PrcsPrep/prcs.ERA5/prcs.ERA5.Remap/Results"
 
 AURORA_PLEVS = [50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 850, 925, 1000]
@@ -324,8 +326,16 @@ class LANLMJODataset(Dataset):
         return [int(np.argmin(np.abs(all_levs - p))) for p in AURORA_PLEVS]
 
     def _load_static_vars(self):
-        """Z, LSM, SLT as pure tensors, upsampled to 0.25deg.  v3: NaN/Inf are
-        zeroed for ALL three statics (previously only slt was sanitized)."""
+        """Z, LSM, SLT as pure tensors, upsampled to 0.25deg.
+
+        v3: NaN/Inf are zeroed for ALL three statics (previously only slt was sanitized).
+        E1: Invariant and static variable loads fail loudly with StaticVarLoadError
+        rather than substituting zero tensors on exception. Earlier versions caught
+        Exception and substituted all-zeros with a UserWarning, risking silent physics
+        degradation (a planet with no topography and no continents, emitting only two
+        warnings in an 11-hour log). docs/findings/2026-09-zeroed-statics.md (task B2)
+        records whether this fallback ever fired in production.
+        """
         static_dir = self.root_dir / "Step00/ERA5.invariant"
 
         z_files = list(static_dir.glob("*_z.*.nc"))
@@ -343,30 +353,50 @@ class LANLMJODataset(Dataset):
         def _clean(t):
             return torch.nan_to_num(t, nan=0.0, posinf=0.0, neginf=0.0)
 
+        z_path = z_files[0]
         try:
-            with xr.open_dataset(z_files[0], engine="netcdf4") as ds_z:
+            with xr.open_dataset(z_path, engine="netcdf4") as ds_z:
                 z_arr = ds_z["Z"].values
             z_tensor = _upsample_to_aurora(_clean(torch.from_numpy(z_arr).float()))
         except Exception as e:
-            warnings.warn(
-                f"[LANLMJODataset] Failed to load invariant Z: {e}. Using zeros."
+            msg = (
+                f"Failed to load invariant variable 'z' from {z_path}: {e}. "
+                "If this error mentions 'NetCDF: HDF error' or 'Errno -101', "
+                "ensure HDF5_USE_FILE_LOCKING=FALSE is set in your environment "
+                "to disable advisory file locking on parallel filesystems."
             )
-            z_tensor = torch.zeros(720, 1440)
+            raise StaticVarLoadError(msg) from e
 
+        lsm_path = lsm_files[0]
         try:
-            with xr.open_dataset(lsm_files[0], engine="netcdf4") as ds_lsm:
+            with xr.open_dataset(lsm_path, engine="netcdf4") as ds_lsm:
                 lsm_arr = ds_lsm["LSM"].values
             lsm_tensor = _upsample_to_aurora(_clean(torch.from_numpy(lsm_arr).float()))
         except Exception as e:
-            warnings.warn(
-                f"[LANLMJODataset] Failed to load invariant LSM: {e}. Using zeros."
+            msg = (
+                f"Failed to load invariant variable 'lsm' from {lsm_path}: {e}. "
+                "If this error mentions 'NetCDF: HDF error' or 'Errno -101', "
+                "ensure HDF5_USE_FILE_LOCKING=FALSE is set in your environment "
+                "to disable advisory file locking on parallel filesystems."
             )
-            lsm_tensor = torch.zeros(720, 1440)
+            raise StaticVarLoadError(msg) from e
 
-        with xr.open_dataset(self.slt_path, engine="netcdf4") as ds_slt:
-            slt_arr = ds_slt["slt"].values
-        slt_tensor = _clean(torch.from_numpy(slt_arr).float())
-        slt_tensor = _ensure_2d(slt_tensor)[:720, :]
+        try:
+            with xr.open_dataset(self.slt_path, engine="netcdf4") as ds_slt:
+                slt_arr = ds_slt["slt"].values
+            slt_tensor = _clean(torch.from_numpy(slt_arr).float())
+            slt_tensor = _ensure_2d(slt_tensor)[:720, :]
+        except Exception as e:
+            msg = (
+                f"Failed to load static soil type 'slt' from {self.slt_path}: {e}. "
+                "Note that 'slt_data.nc' is NOT in the LANL archive; it lives on "
+                "purgeable /pscratch (default /pscratch/sd/k/kam352/Aurora/slt/slt_data.nc). "
+                "scripts/download_slt.py is the only record of how it was produced. "
+                "If this error mentions 'NetCDF: HDF error' or 'Errno -101', "
+                "ensure HDF5_USE_FILE_LOCKING=FALSE is set in your environment "
+                "to disable advisory file locking on parallel filesystems."
+            )
+            raise StaticVarLoadError(msg) from e
 
         return {
             "z": _ensure_2d(z_tensor),
