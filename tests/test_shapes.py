@@ -49,43 +49,30 @@ def test_input_and_target_tensor_ranks_and_axis_order(
 
     # Check input static variables in batch
     for name, tensor in in_batch.static_vars.items():
-        assert (
-            tensor.ndim == 2
-        ), f"in_batch.static_vars['{name}'] has ndim={tensor.ndim}, expected 2"
-        assert tensor.shape == (
-            720,
-            1440,
-        ), f"in_batch.static_vars['{name}'] has shape={tensor.shape}, expected (720, 1440)"
+        assert tensor.ndim == 2, f"static_vars['{name}'] ndim={tensor.ndim} != 2"
+        assert tensor.shape == (720, 1440), f"static_vars['{name}'] shape={tensor.shape}"
 
     # Check input surface variables: rank 4 (B, T, H, W)
     for name, tensor in in_batch.surf_vars.items():
-        assert (
-            tensor.ndim == 4
-        ), f"Surface input '{name}' has rank {tensor.ndim}, expected 4 (B, T, H, W)"
+        assert tensor.ndim == 4, f"Surface input '{name}' rank={tensor.ndim} != 4"
         assert tensor.shape[0] == 1, "Batch dimension must be 1"
         assert tensor.shape[1] == 2, "History timestep dimension must be 2"
 
     # Check input atmospheric variables: rank 5 (B, T, C, H, W)
     for name, tensor in in_batch.atmos_vars.items():
-        assert (
-            tensor.ndim == 5
-        ), f"Atmos input '{name}' has rank {tensor.ndim}, expected 5 (B, T, C, H, W)"
+        assert tensor.ndim == 5, f"Atmos input '{name}' rank={tensor.ndim} != 5"
         assert tensor.shape[0] == 1, "Batch dimension must be 1"
         assert tensor.shape[1] == 2, "History timestep dimension must be 2"
         assert tensor.shape[2] == 13, "Atmospheric pressure level dimension must be 13"
 
     # Check target surface variables: rank 3 (B, H, W) — no time axis
     for name, tensor in surf_out.items():
-        assert (
-            tensor.ndim == 3
-        ), f"Surface target '{name}' has rank {tensor.ndim}, expected 3 (B, H, W)"
+        assert tensor.ndim == 3, f"Surface target '{name}' rank={tensor.ndim} != 3"
         assert tensor.shape[0] == 1, "Batch dimension must be 1"
 
     # Check target atmospheric variables: rank 4 (B, C, H, W) — no time axis
     for name, tensor in atmos_out.items():
-        assert (
-            tensor.ndim == 4
-        ), f"Atmos target '{name}' has rank {tensor.ndim}, expected 4 (B, C, H, W)"
+        assert tensor.ndim == 4, f"Atmos target '{name}' rank={tensor.ndim} != 4"
         assert tensor.shape[0] == 1, "Batch dimension must be 1"
         assert tensor.shape[1] == 13, "Atmospheric pressure level dimension must be 13"
 

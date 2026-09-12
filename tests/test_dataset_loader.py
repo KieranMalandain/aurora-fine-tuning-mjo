@@ -70,25 +70,15 @@ def test_dataset_sample_zero_triple_and_metadata(synthetic_dataset: LANLMJODatas
     in_batch, surf_targets_list, atmos_targets_list = synthetic_dataset[0]
 
     assert isinstance(in_batch, Batch), f"Expected in_batch to be Batch, got {type(in_batch)}"
-    assert isinstance(
-        surf_targets_list, list
-    ), f"Expected surf_targets_list to be list, got {type(surf_targets_list)}"
-    assert isinstance(
-        atmos_targets_list, list
-    ), f"Expected atmos_targets_list to be list, got {type(atmos_targets_list)}"
-    assert (
-        len(surf_targets_list) == 1
-    ), f"Expected 1 target step for max_rollout_steps=1, got {len(surf_targets_list)}"
-    assert (
-        len(atmos_targets_list) == 1
-    ), f"Expected 1 target step for max_rollout_steps=1, got {len(atmos_targets_list)}"
+    assert isinstance(surf_targets_list, list), "surf_targets_list must be list"
+    assert isinstance(atmos_targets_list, list), "atmos_targets_list must be list"
+    assert len(surf_targets_list) == 1, "Expected 1 target step for rollout_steps=1"
+    assert len(atmos_targets_list) == 1, "Expected 1 target step for rollout_steps=1"
 
     surf_out = surf_targets_list[0]
     atmos_out = atmos_targets_list[0]
-    assert isinstance(surf_out, dict), f"Expected surf_out step 0 to be dict, got {type(surf_out)}"
-    assert isinstance(
-        atmos_out, dict
-    ), f"Expected atmos_out step 0 to be dict, got {type(atmos_out)}"
+    assert isinstance(surf_out, dict), "surf_out step 0 must be dict"
+    assert isinstance(atmos_out, dict), "atmos_out step 0 must be dict"
 
     # 03_DOMAIN_PRIORS.md §2: Exact 13 Aurora pressure levels probed independently of grid
     assert in_batch.metadata.atmos_levels == EXPECTED_ATMOS_LEVELS

@@ -187,9 +187,7 @@ def test_rollout_curriculum_progression() -> None:
     }
     for epoch, expected_k in expected_steps.items():
         measured_k = trainer._current_rollout_steps(epoch)
-        assert (
-            measured_k == expected_k
-        ), f"Epoch {epoch}: expected k={expected_k}, got k={measured_k}"
+        assert measured_k == expected_k, f"Epoch {epoch}: expected k={expected_k}"
 
 
 def test_step_loss_weighting() -> None:
@@ -254,18 +252,12 @@ def test_advance_batch_detached_cuts_autograd_graph() -> None:
 
     # With detach=False: computation graph is retained
     attached_batch = _advance_batch(in_batch, pred_batch, step_index=0, detach=False)
-    assert (
-        attached_batch.surf_vars["2t"].grad_fn is not None
-    ), "Expected grad_fn on attached rollout batch"
+    assert attached_batch.surf_vars["2t"].grad_fn is not None, "Expected grad_fn on attached batch"
 
     # With detach=True: autograd graph is severed
     detached_batch = _advance_batch(in_batch, pred_batch, step_index=0, detach=True)
-    assert (
-        detached_batch.surf_vars["2t"].grad_fn is None
-    ), "Expected severed graph (grad_fn=None) when detach=True"
-    assert (
-        detached_batch.atmos_vars["t"].grad_fn is None
-    ), "Expected severed graph (grad_fn=None) on atmospheric vars when detach=True"
+    assert detached_batch.surf_vars["2t"].grad_fn is None, "Expected severed graph when detach=True"
+    assert detached_batch.atmos_vars["t"].grad_fn is None, "Expected severed graph when detach=True"
 
 
 def test_rollout_loss_computation_and_backward() -> None:

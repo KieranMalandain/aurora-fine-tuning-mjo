@@ -65,43 +65,33 @@ def test_lora_and_backbone_freezing_by_module_type() -> None:
 
     assert len(lora_modules) > 0, "Expected LoRA modules in backbone when use_lora=True"
     assert len(lora_params) > 0, "Expected parameters in LoRA modules"
-    assert all(
-        p.requires_grad for _, p in lora_params
-    ), "All LoRA adapter parameters must be trainable (requires_grad=True)"
+    assert all(p.requires_grad for _, p in lora_params), "All LoRA adapter params must be trainable"
 
     # 3. Injected surface variable embeddings (ttr, tcwv) are trainable
     surf_embed = backbone.encoder.surf_token_embeds
     injected_vars = [v for v in config["surface_variables"] if v not in _AURORA_DEFAULT_SURF_VARS]
     assert set(injected_vars) == {"ttr", "tcwv"}
     for var in injected_vars:
-        assert var in surf_embed.weights, f"Injected var '{var}' missing from surf_token_embeds"
-        assert surf_embed.weights[
-            var
-        ].requires_grad, f"Injected var '{var}' embedding must be trainable"
+        assert var in surf_embed.weights, f"Injected var '{var}' missing"
+        assert surf_embed.weights[var].requires_grad, f"Injected '{var}' not trainable"
 
     # 4. Standard pretrained surface variable embeddings are frozen
     for var in _AURORA_DEFAULT_SURF_VARS:
         if var in surf_embed.weights:
-            assert not surf_embed.weights[
-                var
-            ].requires_grad, f"Pretrained var '{var}' embedding must be frozen"
+            assert not surf_embed.weights[var].requires_grad, f"Pretrained '{var}' not frozen"
 
     # 5. MJO head is fully trainable
     assert mjo_head is not None, "MJO head should be constructed when enabled=True"
     head_params = list(mjo_head.parameters())
     assert len(head_params) > 0, "MJO head has no parameters"
-    assert all(
-        p.requires_grad for p in head_params
-    ), "All MJO head parameters must be trainable (requires_grad=True)"
+    assert all(p.requires_grad for p in head_params), "All MJO head params must be trainable"
 
     # 6. Overall trainable ratio is small (< 1%)
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     trainable_fraction = trainable_params / total_params
     assert trainable_params > 0, "Model must have trainable parameters"
-    assert (
-        trainable_fraction < 0.01
-    ), f"Trainable fraction {trainable_fraction:.2%} exceeds 1% ceiling"
+    assert trainable_fraction < 0.01, f"Trainable fraction {trainable_fraction:.2%} >= 1%"
 
 
 def test_baseline_trainable_param_counts_match_domain_priors() -> None:
@@ -123,8 +113,6 @@ def test_baseline_trainable_param_counts_match_domain_priors() -> None:
     frozen_params = sum(p.numel() for p in model.parameters() if not p.requires_grad)
 
     # 03_DOMAIN_PRIORS.md §7: Trainable params = 41,008
-    assert (
-        trainable_params == 41008
-    ), f"Expected 41,008 trainable params per 03_DOMAIN_PRIORS.md §7, got {trainable_params:,}"
+    assert trainable_params == 41008, f"Expected 41,008 trainable params, got {trainable_params:,}"
     assert frozen_params == 112789376, f"Expected 112,789,376 frozen params, got {frozen_params:,}"
     assert total_params == 112830384, f"Expected 112,830,384 total params, got {total_params:,}"

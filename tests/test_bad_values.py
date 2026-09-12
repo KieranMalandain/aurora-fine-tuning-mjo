@@ -150,12 +150,8 @@ def test_scan_synthetic_archive_has_no_bad_values(synthetic_root: Path) -> None:
         assert res.total > 0, f"Variable '{name}' had 0 scanned values"
         assert res.n_nan == 0, f"Variable '{name}' contains {res.n_nan} NaNs"
         assert res.n_inf == 0, f"Variable '{name}' contains {res.n_inf} Infs"
-        assert (
-            res.n_extreme == 0
-        ), f"Variable '{name}' contains {res.n_extreme} values exceeding bound {bound}"
-        assert (
-            res.finite_fraction == 1.0
-        ), f"Variable '{name}' finite fraction is {res.finite_fraction}"
+        assert res.n_extreme == 0, f"Variable '{name}' has {res.n_extreme} extremes > {bound}"
+        assert res.finite_fraction == 1.0, f"Variable '{name}' finite fraction != 1.0"
         assert np.isfinite(res.vmin), f"Variable '{name}' min is non-finite"
         assert np.isfinite(res.vmax), f"Variable '{name}' max is non-finite"
 

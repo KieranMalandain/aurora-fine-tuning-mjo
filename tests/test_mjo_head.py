@@ -63,18 +63,14 @@ def test_mjo_head_disabled_constructs_no_head_and_returns_batch() -> None:
     }
 
     model: AuroraMJO = load_model(config)
-    assert (
-        model.mjo_head is None
-    ), "With mjo_head.enabled=False, no head should be constructed at all (expected None)"
+    assert model.mjo_head is None, "With mjo_head disabled, head must be None"
 
     model.eval()
     batch = _make_tiny_batch(b=1, h=32, w=64)
     with torch.no_grad():
         out = model(batch)
 
-    assert isinstance(
-        out, Batch
-    ), f"Expected Batch output when mjo_head is disabled, got {type(out)}"
+    assert isinstance(out, Batch), f"Expected Batch output, got {type(out)}"
     assert set(out.surf_vars.keys()) == set(SURF_VARS)
 
 
