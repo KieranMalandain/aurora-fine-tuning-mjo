@@ -46,17 +46,6 @@ def run_gate(
     dt = time.perf_counter() - t0
 
     passed = proc.returncode == 0
-
-    # Pytest exit code 5 means no tests were collected.
-    # Until task D1 creates the tests/ directory and adds initial tests,
-    # zero collected tests must be treated as a pass.
-    # TODO(D1): Remove special case for pytest exit code 5 once tests/ exists.
-    if name == "pytest" and proc.returncode == 5:
-        print(
-            "Note: pytest exited 5 (no tests collected). Treated as PASS until D1 creates tests/."
-        )
-        passed = True
-
     return name, passed, dt, why
 
 
