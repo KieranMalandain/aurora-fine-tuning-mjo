@@ -1,8 +1,9 @@
 #!/bin/bash
 #SBATCH -A m4946_g
 #SBATCH -C gpu&hbm80g
-#SBATCH -q interactive
+#SBATCH -q debug
 #SBATCH -t 00:10:00
+#SBATCH -N 1
 #SBATCH -n 1
 #SBATCH -c 32
 #SBATCH --gpus-per-task=1
@@ -10,18 +11,34 @@
 #SBATCH --job-name=aurora_mjo_test
 #SBATCH --output=slurm_logs/test_train_%j.out
 #SBATCH --error=slurm_logs/test_train_%j.err
+#
+# Fast smoke-test verification on NERSC Perlmutter.
+#
+# Usage:
+#   sbatch slurm_scripts/test_train.slurm
+#   MODE=lora sbatch slurm_scripts/test_train.slurm
+#
+# Runs one synthetic training step without requiring CFS data or multi-GPU DDP.
 
-# 1. Initialize Conda cleanly (bypassing NERSC global module conflicts)
-source /global/common/software/nersc/pe/conda/26.1.0/Miniforge3-25.11.0-1/etc/profile.d/conda.sh
+set -euo pipefail
 
-# 2. Activate your GPU-enabled environment using the explicit scratch path
-conda activate /pscratch/sd/k/kam352/conda_envs/aurora_mjo
+# Ensure working directory is repo root
+if [ -n "${SLURM_SUBMIT_DIR:-}" ]; then
+    cd "${SLURM_SUBMIT_DIR}"
+fi
 
-# 3. Point Hugging Face to the fast, local cache
-export HF_HOME=/tmp/hf_home_${USER}
-export HDF5_USE_FILE_LOCKING=FALSE
-export PYTHONUNBUFFERED=1
+mkdir -p slurm_logs
 
-echo "Starting Phase 1 Baseline TEST Training (1 epoch)..."
-srun python train.py --config configs/phase1_baseline.yaml \
-    --override training.epochs=1
+# Sourced NERSC environment
+source slurm_scripts/env.sh
+
+MODE="${MODE:-baseline}"
+CONFIG="${CONFIG:-configs/unified.yaml}"
+
+echo "[test_train] Starting smoke test: MODE=${MODE} CONFIG=${CONFIG} JOB=${SLURM_JOB_ID:-manual} NODE=$(hostname)"
+
+srun uv run --frozen python run.py train \
+    --config "${CONFIG}" \
+    --mode "${MODE}" \
+    --smoke-test \
+    "$@"
