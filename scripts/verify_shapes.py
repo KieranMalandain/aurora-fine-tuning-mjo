@@ -15,15 +15,13 @@ import sys
 if "NERSC_HOST" in os.environ and "HF_HOME" not in os.environ:
     os.environ["HF_HOME"] = f"/tmp/hf_home_{os.environ.get('USER', 'default')}"
 
-import yaml
 
 
 def main():
     # Load config
-    cfg_path = "configs/phase1_baseline.yaml"
-    with open(cfg_path) as f:
-        cfg = yaml.safe_load(f)
+    from aurora_mjo.cli_support import load_config
 
+    cfg = load_config("configs/unified.yaml", mode="baseline")
     data_cfg = cfg["data"]
 
     print("=" * 60)

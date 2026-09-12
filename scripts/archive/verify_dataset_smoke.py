@@ -17,7 +17,6 @@ Task D2 converts the real check into a proper offline test fixture in `tests/`.
 """
 
 import sys
-import warnings
 
 try:
     from aurora_mjo.dataset import LANLMJODataset

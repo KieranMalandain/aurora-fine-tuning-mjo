@@ -33,12 +33,13 @@ Data leakage contract
 Usage
 -----
     # Real evaluation (requires checkpoint + data on NERSC)
-    python scripts/evaluate_mjo.py \\
-        --config  configs/phase1_baseline.yaml \\
-        --checkpoint checkpoints/phase1_baseline/epoch_010_val0.3400.pt \\
-        --targets data/rmm_targets.nc \\
-        --basis   data/rmm_basis.npz \\
-        --out-dir evaluation/baseline_phase1 \\
+    python scripts/evaluate_mjo.py \
+        --config  configs/unified.yaml \
+        --mode    baseline \
+        --checkpoint checkpoints/baseline/epoch_010_val0.3400.pt \
+        --targets data/rmm_targets.nc \
+        --basis   data/rmm_basis.npz \
+        --out-dir evaluation/baseline \
         --split   val
 
     # Smoke test (no data, no GPU, no checkpoint)
@@ -59,7 +60,7 @@ from __future__ import annotations
 import argparse
 import sys
 import warnings
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -75,12 +76,19 @@ TEST_YEARS = list(range(2020, 2024))
 
 ACTIVE_MJO_THRESHOLD = 1.0  # amplitude > this → active MJO
 MAX_LEAD_DAYS = 30  # default evaluation horizon
-STEP_HRS = 6  # Aurora step size in hours
-STEPS_PER_DAY = 24 // STEP_HRS  # = 4
+STEPS_PER_DAY = 24 // 6  # = 4
 
-LAT_S = -15.0  # tropical band for EOF projection fallback
-LAT_N = 15.0
-
+# Pure RMM evaluation functions and constants extracted to aurora_mjo.rmm.evaluate
+from aurora_mjo.rmm.evaluate import (
+    _advance_time,
+    amplitude_error,
+    bivariate_acc,
+    extract_rmm_from_fields,
+    extract_rmm_from_mjo_head,
+    phase_error_deg,
+    project_fields_to_rmm,
+    rmse_pair,
+)
 
 # ---------------------------------------------------------------------------
 # RMM utility functions
@@ -115,207 +123,9 @@ def load_targets(targets_path: Path, split: str = "val") -> xr.Dataset:
     return ds.sel(time=mask)
 
 
-def project_fields_to_rmm(
-    olr_trop: float,
-    u850_trop: float,
-    u200_trop: float,
-    doy: int,
-    basis: dict,
-) -> tuple[float, float]:
-    """
-    Project a single set of daily tropical-mean anomalies onto the frozen EOF
-    basis to obtain predicted RMM1 and RMM2.
-
-    Parameters
-    ----------
-    olr_trop, u850_trop, u200_trop : tropical-mean values for that day
-    doy   : day of year (1–366)
-    basis : loaded from load_basis()
-
-    Returns
-    -------
-    rmm1, rmm2 : float
-    """
-    # Find climatology index (DOY array may not start at 1)
-    doy_arr = basis["doy"]
-    idx = np.searchsorted(doy_arr, doy)
-    idx = np.clip(idx, 0, len(doy_arr) - 1)
-
-    olr_anom = (olr_trop - basis["olr_clim"][idx]) / (basis["olr_std"] + 1e-8)
-    u850_anom = (u850_trop - basis["u850_clim"][idx]) / (basis["u850_std"] + 1e-8)
-    u200_anom = (u200_trop - basis["u200_clim"][idx]) / (basis["u200_std"] + 1e-8)
-
-    x = np.array([olr_anom, u850_anom, u200_anom])
-    rmm1 = float(x @ basis["eof1"])
-    rmm2 = float(x @ basis["eof2"])
-    return rmm1, rmm2
-
-
-# ---------------------------------------------------------------------------
-# Metric functions
-# ---------------------------------------------------------------------------
-
-
-def bivariate_acc(
-    rmm1_fc: np.ndarray, rmm2_fc: np.ndarray, rmm1_ob: np.ndarray, rmm2_ob: np.ndarray
-) -> float:
-    """
-    Bivariate Anomaly Correlation Coefficient (Wheeler & Hendon 2004).
-
-    ACC = Σ(rmm1_f·rmm1_o + rmm2_f·rmm2_o)
-          / sqrt[ Σ(rmm1_f²+rmm2_f²) · Σ(rmm1_o²+rmm2_o²) ]
-
-    Both arrays must have the same length N (paired forecast/observation).
-    Returns NaN if fewer than 2 valid pairs.
-    """
-    n = len(rmm1_fc)
-    if n < 2:
-        return np.nan
-    cov = np.sum(rmm1_fc * rmm1_ob + rmm2_fc * rmm2_ob)
-    var_fc = np.sum(rmm1_fc**2 + rmm2_fc**2)
-    var_ob = np.sum(rmm1_ob**2 + rmm2_ob**2)
-    denom = np.sqrt(var_fc * var_ob)
-    if denom < 1e-12:
-        return np.nan
-    return float(cov / denom)
-
-
-def rmse_pair(fc: np.ndarray, ob: np.ndarray) -> float:
-    """Root mean squared error between two equal-length arrays."""
-    if len(fc) < 1:
-        return np.nan
-    return float(np.sqrt(np.mean((fc - ob) ** 2)))
-
-
-def amplitude_error(amp_fc: np.ndarray, amp_ob: np.ndarray) -> float:
-    """Mean signed amplitude error (bias): E[amp_fc - amp_ob]."""
-    if len(amp_fc) < 1:
-        return np.nan
-    return float(np.mean(amp_fc - amp_ob))
-
-
-def phase_error_deg(
-    rmm1_fc: np.ndarray, rmm2_fc: np.ndarray, rmm1_ob: np.ndarray, rmm2_ob: np.ndarray
-) -> float:
-    """
-    Mean absolute phase error in degrees.
-
-    Phase angle = atan2(RMM2, RMM1).
-    Wraps difference to [-180, 180].
-    """
-    if len(rmm1_fc) < 1:
-        return np.nan
-    angle_fc = np.degrees(np.arctan2(rmm2_fc, rmm1_fc))
-    angle_ob = np.degrees(np.arctan2(rmm2_ob, rmm1_ob))
-    diff = angle_fc - angle_ob
-    # Wrap to [-180, 180]
-    diff = (diff + 180) % 360 - 180
-    return float(np.mean(np.abs(diff)))
-
-
-# ---------------------------------------------------------------------------
-# Model-agnostic RMM extraction from a rollout
-# ---------------------------------------------------------------------------
-
-
-def extract_rmm_from_mjo_head(
-    mjo_pred: torch.Tensor,  # (B, 3)
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Extract RMM1, RMM2, Amplitude from MJO head output tensor."""
-    arr = mjo_pred.detach().cpu().numpy()  # (B, 3)
-    rmm1 = arr[:, 0]
-    rmm2 = arr[:, 1]
-    amp = np.sqrt(rmm1**2 + rmm2**2)
-    return rmm1, rmm2, amp
-
-
-def extract_rmm_from_fields(
-    pred_batch: aurora.batch.Batch,
-    valid_time: datetime,
-    basis: dict,
-    lat_name: str = "lat",
-) -> tuple[float, float, float] | tuple[None, None, None]:
-    """
-    Fallback: project needed OLR / U850 / U200 fields from an Aurora ``Batch``
-    output onto the frozen EOF basis.
-
-    Returns (rmm1, rmm2, amplitude) for a single sample or (None, None, None)
-    if the required fields are missing.
-
-    Aurora Batch layout
-    -------------------
-    pred_batch.surf_vars  : dict[str, Tensor(B, T, H, W)]
-    pred_batch.atmos_vars : dict[str, Tensor(B, T, C, H, W)]
-    pred_batch.metadata.lat : Tensor(H,)
-    pred_batch.metadata.lon : Tensor(W,)
-    pred_batch.metadata.atmos_levels : tuple of pressure levels in hPa
-    """
-
-    surf = pred_batch.surf_vars
-    atmos = pred_batch.atmos_vars
-    meta = pred_batch.metadata
-
-    # --- OLR fallback variable names (mtnlwrf or ttr) ---
-    olr_key = None
-    for k in ("mtnlwrf", "ttr"):
-        if k in surf:
-            olr_key = k
-            break
-
-    has_u = "u" in atmos
-    if olr_key is None or not has_u:
-        return None, None, None
-
-    lat = meta.lat.cpu().numpy()  # (H,)
-    levels = np.array(meta.atmos_levels)
-
-    # Tropical mask
-    trop = (lat >= LAT_S) & (lat <= LAT_N)
-    if not trop.any():
-        return None, None, None
-
-    # Cosine-latitude weights for tropical band
-    lat_trop = lat[trop]
-    weights = np.cos(np.deg2rad(lat_trop))
-    weights /= weights.sum()
-
-    def _trop_mean_surf(var_key: str) -> float:
-        """Return scalar tropical mean of the last time step of a surf var."""
-        t = surf[var_key][0, -1].cpu().numpy()  # (H, W)
-        t_trop = t[trop, :]  # (n_trop, W)
-        return float((t_trop * weights[:, None]).sum(axis=0).mean())
-
-    def _trop_mean_pressure(var_key: str, plevel_hpa: int) -> float | None:
-        """Return scalar tropical mean at a given pressure level, last step."""
-        t = atmos[var_key][0, -1]  # (C, H, W)
-        if plevel_hpa not in levels:
-            idx = np.argmin(np.abs(levels - plevel_hpa))
-        else:
-            idx = int(np.where(levels == plevel_hpa)[0][0])
-        t_lev = t[idx].cpu().numpy()  # (H, W)
-        t_trop = t_lev[trop, :]
-        return float((t_trop * weights[:, None]).sum(axis=0).mean())
-
-    olr_val = _trop_mean_surf(olr_key)
-    u850_val = _trop_mean_pressure("u", 850)
-    u200_val = _trop_mean_pressure("u", 200)
-
-    if u850_val is None or u200_val is None:
-        return None, None, None
-
-    doy = valid_time.timetuple().tm_yday
-    rmm1, rmm2 = project_fields_to_rmm(olr_val, u850_val, u200_val, doy, basis)
-    amp = float(np.sqrt(rmm1**2 + rmm2**2))
-    return rmm1, rmm2, amp
-
-
 # ---------------------------------------------------------------------------
 # Core evaluation loop
 # ---------------------------------------------------------------------------
-
-
-def _advance_time(t: datetime, n_steps: int, step_hrs: int = STEP_HRS) -> datetime:
-    return t + timedelta(hours=n_steps * step_hrs)
 
 
 def run_evaluation(
@@ -819,8 +629,15 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--config",
         type=Path,
-        default=None,
-        help="Path to YAML config used when the checkpoint was trained.",
+        default=Path("configs/unified.yaml"),
+        help="Path to YAML config used when the checkpoint was trained (default: configs/unified.yaml).",
+    )
+    p.add_argument(
+        "--mode",
+        type=str,
+        default="baseline",
+        choices=["baseline", "physics_informed", "lora", "combined"],
+        help="Mode overlay to evaluate in unified config (default: baseline).",
     )
     p.add_argument(
         "--checkpoint",
@@ -890,16 +707,15 @@ def parse_args() -> argparse.Namespace:
 def _load_model_and_config(args: argparse.Namespace):
     """Load model + config from checkpoint and config file."""
     import torch
-    import yaml
 
+    from aurora_mjo.cli_support import load_config
     from aurora_mjo.model import load_model
 
     if args.config is None or not args.config.exists():
         raise FileNotFoundError(
             f"Config file not found: {args.config}. Pass --config path/to/config.yaml"
         )
-    with open(args.config) as f:
-        cfg = yaml.safe_load(f)
+    cfg = load_config(str(args.config), mode=getattr(args, "mode", None))
 
     model = load_model(cfg.get("model", cfg))  # handle flat or nested config
 
