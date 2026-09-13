@@ -1,7 +1,7 @@
 # Living Project State
 
-**Last Updated:** 2026-09-12  
-**Active Phase:** Campaign `refactor` complete (Tasks A1–F1 implemented); transitioning to scientific baseline campaign.  
+**Last Updated:** 2026-09-13  
+**Active Phase:** Campaign `refactor` complete and accepted (Tasks A1–F2 implemented); ready for human merge to `main`.  
 
 ---
 
@@ -28,6 +28,7 @@
 | **SLURM Automation** | **GREEN** | Task E3 (`slurm_scripts/`) | All scripts unified under `uv run --frozen`; `env.sh` extracted; signal traps preserved. |
 | **July 2026 Run Forensics** | **RESOLVED** | Task B2 / [`docs/findings/2026-09-zeroed-statics.md`](findings/2026-09-zeroed-statics.md) | Logs purged on scratch, but structural proof shows past runs did not run on zero statics. |
 | **Documentation Suite** | **GREEN** | Task F1 (`README`, `SPEC`, `SETUP`, etc.) | Outdated configs and legacy cluster references purged; durable lessons promoted into `SPEC.md`. |
+| **Perlmutter Acceptance** | **GREEN** | Task F2 (`results/F2_result.md`) | Fresh scratch clone; gate green; 5 data tests pass; 2 GPU tests pass; smoke test bitwise-identical to B1; SLURM debug job completed exit 0. |
 
 ---
 
