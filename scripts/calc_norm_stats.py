@@ -22,7 +22,7 @@ agent; only the AURORA_MJO_GAMEPLAN.md description of the diff (FIX 2a) was
 available. This is therefore a from-scratch reconstruction, not a literal
 patch of the real script. It reuses the exact same file-discovery pattern
 already proven working in `src/dataset.py::_collect_var_files` and
-`tools/diagnose_val_nan.py::_collect`, and the ttr/tcwv path/native-name
+`scripts/diagnose_val_nan.py::_collect`, and the ttr/tcwv path/native-name
 pairs match the values already trusted and in use in `configs/unified.yaml`
 (mean=-226.0498/std=49.2158 for ttr, mean=18.2967/std=16.3265 for tcwv) as a
 sanity check once it's run for real on NERSC. **Before trusting the msl
@@ -51,16 +51,18 @@ from pathlib import Path
 import numpy as np
 import yaml
 
-DEFAULT_ROOT = ("/global/cfs/cdirs/m4946/xiaoming/zm4946.MachLearn/PrcsPrep/"
-                 "prcs.ERA5/prcs.ERA5.Remap/Results")
+DEFAULT_ROOT = (
+    "/global/cfs/cdirs/m4946/xiaoming/zm4946.MachLearn/PrcsPrep/"
+    "prcs.ERA5/prcs.ERA5.Remap/Results"
+)
 
 # {aurora_name: (step_subdir, native_var_name)} — must match src/dataset.py's
 # SURFACE_VAR_MAP path/native-name pairs exactly, or the computed stats won't
 # match what the dataloader actually feeds the model.
 VARIABLES_TO_CALC = {
-    'msl':  ('Step02/ERA5.remap_180x360MODIS_6hrInst/PS',          'ps'),
-    'ttr':  ('Step03/ERA5.remap_180x360MODIS_6hrInst/meanTNLWFLX', 'mtnlwrf'),
-    'tcwv': ('Step02/ERA5.remap_180x360MODIS_6hrInst/tcwv',        'tcwv'),
+    "msl": ("Step02/ERA5.remap_180x360MODIS_6hrInst/PS", "ps"),
+    "ttr": ("Step03/ERA5.remap_180x360MODIS_6hrInst/meanTNLWFLX", "mtnlwrf"),
+    "tcwv": ("Step02/ERA5.remap_180x360MODIS_6hrInst/tcwv", "tcwv"),
 }
 
 
@@ -91,7 +93,8 @@ class _Welford:
     memory at a time - required at this data volume (36 years x ~1460
     timesteps x 180x360 per variable).
     """
-    __slots__ = ("n", "mean", "m2")
+
+    __slots__ = ("m2", "mean", "n")
 
     def __init__(self):
         self.n = 0
@@ -105,7 +108,7 @@ class _Welford:
             return
         batch_n = values.size
         batch_mean = float(values.mean())  # native float — numpy scalars poison
-        batch_var = float(values.var())    # self.mean/m2 into np.float64 forever
+        batch_var = float(values.var())  # self.mean/m2 into np.float64 forever
         # otherwise, which yaml.safe_dump cannot serialize downstream.
 
         new_n = self.n + batch_n
@@ -126,37 +129,61 @@ def compute_stats(root: Path, y0: int, y1: int, variables: dict) -> dict:
     for aurora_name, (step_subdir, native_name) in variables.items():
         files = _collect_files(root, step_subdir, y0, y1)
         if not files:
-            print(f"  [{aurora_name}] WARNING: no files found under "
-                  f"{root / step_subdir} for {y0}-{y1}; skipping.")
+            print(
+                f"  [{aurora_name}] WARNING: no files found under "
+                f"{root / step_subdir} for {y0}-{y1}; skipping."
+            )
             continue
         acc = _Welford()
         for i, f in enumerate(files):
             with xr.open_dataset(str(f), engine="netcdf4") as ds:
                 if native_name not in ds:
-                    print(f"  [{aurora_name}] WARNING: '{native_name}' not in "
-                          f"{f.name}; skipping this file.")
+                    print(
+                        f"  [{aurora_name}] WARNING: '{native_name}' not in "
+                        f"{f.name}; skipping this file."
+                    )
                     continue
                 arr = ds[native_name].values
             acc.update_batch(arr)
             if (i + 1) % 20 == 0 or (i + 1) == len(files):
-                print(f"  [{aurora_name}] {i+1}/{len(files)} files | "
-                      f"running mean={acc.mean:.4f} std={acc.std:.4f}")
-        results[aurora_name] = {"mean": round(float(acc.mean), 4), "std": round(float(acc.std), 4)}
-        print(f"  [{aurora_name}] FINAL: mean={acc.mean:.4f} std={acc.std:.4f} "
-              f"(n={acc.n:,} finite values, native='{native_name}')")
+                print(
+                    f"  [{aurora_name}] {i + 1}/{len(files)} files | "
+                    f"running mean={acc.mean:.4f} std={acc.std:.4f}"
+                )
+        results[aurora_name] = {
+            "mean": round(float(acc.mean), 4),
+            "std": round(float(acc.std), 4),
+        }
+        print(
+            f"  [{aurora_name}] FINAL: mean={acc.mean:.4f} std={acc.std:.4f} "
+            f"(n={acc.n:,} finite values, native='{native_name}')"
+        )
     return results
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--config", default="configs/unified.yaml",
-                     help="Config to read data.root / data.real.train_years from.")
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument(
+        "--config",
+        default="configs/unified.yaml",
+        help="Config to read data.root / data.real.train_years from.",
+    )
     ap.add_argument("--root", default=None, help="Override the data root.")
-    ap.add_argument("--years", nargs=2, type=int, default=None,
-                     help="Override train years, e.g. --years 1980 2015.")
-    ap.add_argument("--variables", nargs="+", default=None,
-                     help="Subset of VARIABLES_TO_CALC to compute, e.g. --variables msl.")
+    ap.add_argument(
+        "--years",
+        nargs=2,
+        type=int,
+        default=None,
+        help="Override train years, e.g. --years 1980 2015.",
+    )
+    ap.add_argument(
+        "--variables",
+        nargs="+",
+        default=None,
+        help="Subset of VARIABLES_TO_CALC to compute, e.g. --variables msl.",
+    )
     ap.add_argument("--out", default="scripts/computed_norm_stats.yaml")
     args = ap.parse_args()
 
@@ -166,13 +193,17 @@ def main():
         with open(cfg_path) as f:
             cfg = yaml.safe_load(f) or {}
     else:
-        print(f"WARNING: config '{args.config}' not found; using CLI overrides / defaults only.")
+        print(
+            f"WARNING: config '{args.config}' not found; using CLI overrides / defaults only."
+        )
 
     root = Path(args.root or cfg.get("data", {}).get("root", DEFAULT_ROOT))
     if args.years:
         y0, y1 = args.years
     else:
-        train_years = cfg.get("data", {}).get("real", {}).get("train_years", [1980, 2015])
+        train_years = (
+            cfg.get("data", {}).get("real", {}).get("train_years", [1980, 2015])
+        )
         y0, y1 = train_years[0], train_years[1]
 
     variables = VARIABLES_TO_CALC
@@ -200,10 +231,12 @@ def main():
     print(f"\nAlso written to {out_path}")
 
     if "msl" not in results:
-        print("\nNOTE: msl stats were not computed. Training will keep using the "
-              "FIX-2 fallback (Aurora sp stats: mean=96647.375, std=9586.6914) "
-              "already placed in configs/unified.yaml until you run this "
-              "script successfully and paste the real numbers in.")
+        print(
+            "\nNOTE: msl stats were not computed. Training will keep using the "
+            "FIX-2 fallback (Aurora sp stats: mean=96647.375, std=9586.6914) "
+            "already placed in configs/unified.yaml until you run this "
+            "script successfully and paste the real numbers in."
+        )
 
 
 if __name__ == "__main__":

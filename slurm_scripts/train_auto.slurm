@@ -48,17 +48,13 @@ if [ -f "STOP_TRAINING" ]; then
     exit 0
 fi
 
-# 1. Conda (bypassing NERSC global module conflicts)
-source /global/common/software/nersc/pe/conda/26.1.0/Miniforge3-25.11.0-1/etc/profile.d/conda.sh
-conda activate /pscratch/sd/k/kam352/conda_envs/aurora_mjo
+# 1. Ensure working directory is repo root
+if [ -n "${SLURM_SUBMIT_DIR:-}" ]; then
+    cd "${SLURM_SUBMIT_DIR}"
+fi
 
-# 2. NERSC environment
-export HF_HOME=${PSCRATCH}/hf_home            # PERSISTENT cache (was /tmp → re-download every job)
-export HF_HUB_ETAG_TIMEOUT=60
-export HDF5_USE_FILE_LOCKING=FALSE
-export PYTHONUNBUFFERED=1
-export OMP_NUM_THREADS=8
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True   # anti-fragmentation (cuBLAS/OOM fix)
+# 2. Sourced NERSC environment
+source slurm_scripts/env.sh
 export MASTER_ADDR=$(hostname)
 export MASTER_PORT=$(( 29000 + SLURM_JOB_ID % 1000 ))     # avoid port collisions between chained jobs
 
@@ -66,12 +62,12 @@ echo "[chain] MODE=${MODE}  CONFIG=${CONFIG}  JOB=${SLURM_JOB_ID}  NODE=$(hostna
 
 # 3. Launch DDP under srun in the background so this shell can catch USR1
 #    and forward it to every python rank.
-srun --cpu-bind=cores torchrun \
+srun --cpu-bind=cores uv run --frozen torchrun \
     --nnodes=1 \
     --nproc_per_node=4 \
     --rdzv_backend=c10d \
     --rdzv_endpoint=${MASTER_ADDR}:${MASTER_PORT} \
-    train.py --config "${CONFIG}" --mode "${MODE}" --resume auto &
+    run.py train --config "${CONFIG}" --mode "${MODE}" --resume auto &
 SRUN_PID=$!
 
 forward_usr1() {

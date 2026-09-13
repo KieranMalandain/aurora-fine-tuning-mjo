@@ -1,189 +1,114 @@
-# Git and GitHub Policy
+# Git & GitHub Governance Policy
 
-## Purpose
+**Status:** Authoritative Repository Policy  
+**Branching Model:** Epic Branch Discipline (supersedes the legacy worktree model)  
 
-This repository uses a controlled Git workflow designed for safe parallel development with human and AI agents.
+---
 
-The goals are:
-- preserve stable historical states
-- support parallel feature development
-- prevent agents from interfering with one another
-- keep `main` stable
-- allow fast rollback and recovery
+## 1. Core Principles
 
-## Core principles
+1. **`main` is protected and authoritative.** It reflects verified, production-ready code.
+2. **Sequential execution over parallel worktrees.** Work runs sequentially on task branches cut from an epic branch.
+3. **Automated verification is mandatory.** Every commit and branch must pass `scripts/check.py` before integration.
+4. **Agents propose; humans integrate.** Agents never merge to `main` or to an epic branch. All merges are executed by human maintainers.
+5. **Historical recovery points are immutable.** Archive tags, backup bundles, and historical baseline refs must never be deleted or overwritten.
 
-1. `main` is protected and stable.
-2. Agents do not work directly on `main`.
-3. Parallel work happens on isolated branches and isolated Git worktrees.
-4. Merges flow through pull requests.
-5. Human review is required before code reaches `main`.
-6. Historical restore points must be preserved with tags and archive branches.
-7. Environment-specific changes must not be mixed casually with model-science changes.
+---
 
-## Branch model
+## 2. The Epic Branching Model
 
-### Protected branches
-- `main`: stable branch, human-approved only
-- `integration/antigravity`: integration branch for combining agent work before merging to `main`
+This repository operates on an **Epic Branch** strategy:
 
-### Archival branch
-- `archive/pre-antigravity-baseline`: preserved pre-agent baseline
+```text
+main (protected)
+  └── epic/refactor (or epic/<slug>)
+        ├── epic/refactor-A1-uv-pyproject
+        ├── epic/refactor-A2-hygiene-untrack
+        └── ...
+```
 
-### Agent branches
-Agent branches should be task-specific and short-lived.
+### Branch Hierarchy
+- **`main`**: Long-term stable branch. Protected in GitHub; requires PR review and green CI.
+- **`epic/<slug>`** (e.g. `epic/refactor`): The active integration branch for a campaign. Created from `main` at campaign initiation; merged back to `main` by the human maintainer only after the full campaign acceptance gate is green.
+- **`epic/<slug>-<TASK_ID>-<short-slug>`**: Short-lived, single-task branches cut directly from `epic/<slug>`. Each task in a campaign receives its own branch, commits at internal milestones, and pushes for human review.
 
-Examples:
-- `agent/docs-context`
-- `agent/env-portability`
-- `agent/rmm-eval`
-- `agent/mjo-head`
-- `agent/rollout-training`
-- `agent/physics-loss`
+### Allowed Pull Request Flow
+1. Task branch pushed: `epic/refactor-<TASK_ID>-<short-slug>`.
+2. Human reviews task result file (`results/<TASK_ID>_result.md`) and verifies `scripts/check.py`.
+3. Human merges task branch into `epic/<slug>`.
+4. After all campaign tasks pass, human merges `epic/<slug>` into `main`.
 
-## Snapshot policy
+---
 
-Before major workflow changes or agent-driven refactors:
-- create an annotated tag
-- push the tag to GitHub
-- create and push an archive branch if the state may need to be revisited or patched
+## 3. Why the Legacy Worktree Model Was Dropped
 
-Example tags:
-- `v0.1.0-pre-agents`
-- `v0.1.1-agent-scaffold`
+> [!WARNING]
+> **Rationale for Dropping Git Worktrees:**
+> The earlier repository policy mandated a "git worktree per agent" model. In practice, this produced four uncoordinated worktrees (`human-integration`, `campaign-fixes`, `agent-simul-training-one`, `consolidation`), three divergent remote branches, and detached stashes. Changes were hand-carried across trees, tracking branches drifted, and nobody could determine which codebase was authoritative. Unwinding this required a nine-task emergency consolidation.
+> 
+> **Rule:** Git worktrees are strictly prohibited for agent operations in this repository. One clone, one active branch per task, executed sequentially.
 
-## Worktree policy
+---
 
-Parallel work must use Git worktrees.
-
-Rules:
-- each active agent gets its own worktree
-- no two agents should work in the same worktree
-- no two agents should edit the same file concurrently
-- the human integrator should use a separate integration worktree
-
-Worktrees are branch-isolated working copies of the same repository.
-They are not separate projects and should not change the logical repository structure.
-
-## Commit policy
+## 4. Commit Message Quality & Hygiene
 
 Commits must be:
-- small
-- coherent
-- task-specific
-- readable
+- Focused on a single logical milestone.
+- Accompanied by a descriptive message explaining **why** the change was made, not just what was changed.
+- Verified: `uv run pre-commit run --all-files` must pass without `--no-verify`.
+- Synchronized: If `pyproject.toml` is modified, `uv.lock` must be committed in the **same commit**.
 
-Good examples:
-- `Document current architecture and known gaps`
-- `Add environment-specific path configuration`
-- `Implement RMM evaluation scaffold`
-- `Add optional MJO head interface`
+### Good Commit Message Examples
+```text
+C1: move src/ to src/aurora_mjo/ to resolve third-party import collision
 
-Bad examples:
-- `update project`
+microsoft-aurora owns the top-level `aurora` namespace in site-packages.
+A first-party package called `aurora` shadows it, causing immediate ImportError
+on Batch. Renamed source package to aurora_mjo and repointed 27 imports.
+```
+
+```text
+E1: configure HDF5_USE_FILE_LOCKING=FALSE at process startup
+
+CFS parallel mounts require advisory locking disabled to prevent Errno -101
+NetCDF errors. Configured automatically in src/aurora_mjo/env.py and verified
+before C-libraries initialize.
+```
+
+### Bad Commit Message Examples
 - `fix stuff`
+- `wip`
+- `update docs`
 - `many changes`
 
-## Pull request policy
+---
 
-### Allowed flow
-- agent branch -> `integration/antigravity`
-- `integration/antigravity` -> `main`
+## 5. Protected Historical Recovery Points
 
-### Rules
-- agents must not merge their own PRs to `main`
-- human review is required before merge to `main`
-- PR descriptions should summarize:
-  - purpose
-  - changed files
-  - commands run
-  - risks / assumptions
+The following historical recovery points are preserved in Git history and backup storage. **Do not delete, move, rebase, or overwrite any ref in this table:**
 
-## Main branch safety policy
+| Reference Name | Type | Historical Context | Protection Level |
+| :--- | :--- | :--- | :--- |
+| `origin/archive/pre-antigravity-baseline` | Remote branch (`800455a`) | Authoritative baseline before agent onboarding | **DO NOT DELETE** |
+| `backup/pre-cleanup/main` | Git Tag / Ref (`07a9ce0`) | State of `main` before September 2026 consolidation | Immutable |
+| `backup/pre-cleanup/antigravity` | Git Tag / Ref (`b0cff2d`) | Pre-cleanup integration branch | Immutable |
+| `backup/pre-cleanup/campaign-fixes` | Git Tag / Ref (`b9ffe63`) | Pre-cleanup bugfix branch | Immutable |
+| `backup/pre-cleanup/simul-training` | Git Tag / Ref (`6862fdf`) | Pre-cleanup parallel training worktree | Immutable |
+| `v0.1.0-pre-agents` | Annotated Tag | Clean historical tag | Immutable |
+| `v0.1.1-agent-scaffold` | Annotated Tag | Clean historical tag | Immutable |
+| `v0.1.2-pre-campaign-fixes` | Annotated Tag | Clean historical tag | Immutable |
 
-`main` should be protected with:
-- required pull requests
-- required status checks
-- no force pushes
-- no branch deletion
+### Offline Backups
+Incremental bundles and conda environment exports are stored in `$HOME/aurora-backup/`:
+- `aurora_mjo-explicit-*.txt`: Ground-truth dependency list for initial `uv` lockfile creation.
+- `cleanup-preserve-*.tar.gz`: Preserved patch sets from the September 2026 consolidation.
 
-## Validation policy
+---
 
-Before merging to `main`, changes should pass lightweight validation appropriate to the task.
+## 6. Main Branch Safety & CI Requirements
 
-Examples:
-- Python import / syntax smoke tests
-- configuration validation
-- tiny model construction tests
-- evaluation script smoke tests
-
-Heavy training jobs are not required in GitHub Actions.
-
-## Environment policy
-
-This project currently spans multiple compute environments, including Yale Bouchet HPC and LANL/NERSC.
-
-Rules:
-- do not hardcode environment-specific paths unless explicitly intended
-- path roots must be configurable
-- Yale subset assumptions must not be mistaken for full-dataset assumptions
-- portability changes should be isolated in dedicated branches when possible
-
-## Agent policy
-
-Agents may:
-- inspect repository state
-- modify files within their task scope
-- commit to their own branch
-- push their own branch if authorized
-
-Agents may not:
-- push directly to `main`
-- merge to `main`
-- force-push shared branches without approval
-- delete branches or worktrees without approval
-- rewrite large parts of the repository without a reviewed plan
-
-## Human integrator policy
-
-The human integrator is responsible for:
-- creating snapshot tags and archive branches
-- assigning agent task scopes
-- reviewing PRs
-- resolving cross-branch conflicts
-- deciding merge order
-- approving final merge to `main`
-
-## Rollback policy
-
-Rollback options include:
-- checkout of annotated tags
-- comparison against archive branches
-- cherry-picking prior commits
-- restoration from git bundle backups
-
-## Recommended merge order
-
-Suggested order for this repository:
-1. docs/context
-2. environment portability
-3. evaluation pipeline
-4. MJO model head
-5. rollout training
-6. physics-informed extensions
-
-## Repository structure policy
-
-The repository should remain organized by code function, not by agent identity.
-
-Preferred structure:
-- `src/`
-- `scripts/`
-- `configs/`
-- `docs/`
-- `slurm/`
-
-Do not create permanent top-level directories for individual agents.
-Agent isolation is handled by branches and worktrees, not by repository layout.
-
-Worktrees are local development conveniences and are environment-specific. They should not be treated as durable cross-cluster artifacts. The portable source of truth is Git history on remote branches, tags, and pull requests. If development shifts from Bouchet to NERSC, recreate worktrees there from the pushed branches rather than trying to move local worktree directories directly.
+Repository administrators must configure GitHub repository rulesets for `main`:
+- Require pull request before merging (no direct pushes to `main`).
+- Require status check `check` from `.github/workflows/ci.yml` to pass.
+- Require linear history (rebase or squash merges preferred).
+- Disallow force pushes and branch deletions on `main`.

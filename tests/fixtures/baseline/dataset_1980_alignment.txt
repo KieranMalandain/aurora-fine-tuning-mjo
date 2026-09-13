@@ -1,0 +1,13 @@
+Initializing LANL MJO Dataset (1980-1980) [timestamp-aligned v3]...
+  [align] requested range 1980-1980 | common timeline: 1464 steps | union: 1464 | valid 1-step samples: 1462
+  [align]      2t: files=12   raw_steps=1464    kept=1464   
+  [align]     10u: files=12   raw_steps=1464    kept=1464   
+  [align]     10v: files=12   raw_steps=1464    kept=1464   
+  [align]     msl: files=12   raw_steps=1464    kept=1464   
+  [align]     ttr: files=12   raw_steps=1464    kept=1464   
+  [align]    tcwv: files=12   raw_steps=1464    kept=1464   
+  [align]       z: files=12   raw_steps=1464    kept=1464   
+  [align]       q: files=12   raw_steps=1464    kept=1464   
+  [align]       t: files=12   raw_steps=1464    kept=1464   
+  [align]       u: files=12   raw_steps=1464    kept=1464   
+  [align]       v: files=12   raw_steps=1464    kept=1464   

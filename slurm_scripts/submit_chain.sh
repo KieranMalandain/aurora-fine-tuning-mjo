@@ -23,22 +23,24 @@ set -euo pipefail
 MODE="${1:?usage: submit_chain.sh <mode> <n_jobs> [after_job_id]}"
 N="${2:?usage: submit_chain.sh <mode> <n_jobs> [after_job_id]}"
 DEP="${3:-}"
+CONFIG="${CONFIG:-configs/unified.yaml}"
 
 case "${MODE}" in
     baseline|physics_informed|lora|combined) ;;
     *) echo "unknown mode: ${MODE}" >&2; exit 1 ;;
 esac
 
-SCRIPT="slurm_scripts/train_auto.slurm"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT="${SCRIPT_DIR}/train_auto.slurm"
 PREV="${DEP}"
 
 for i in $(seq 1 "${N}"); do
     if [ -n "${PREV}" ]; then
-        JID=$(MODE="${MODE}" sbatch --parsable --dependency=afterany:"${PREV}" \
-              --export=ALL,MODE="${MODE}" "${SCRIPT}")
+        JID=$(sbatch --parsable --dependency=afterany:"${PREV}" \
+              --export=ALL,MODE="${MODE}",CONFIG="${CONFIG}" "${SCRIPT}")
     else
-        JID=$(MODE="${MODE}" sbatch --parsable \
-              --export=ALL,MODE="${MODE}" "${SCRIPT}")
+        JID=$(sbatch --parsable \
+              --export=ALL,MODE="${MODE}",CONFIG="${CONFIG}" "${SCRIPT}")
     fi
     echo "[submit_chain] ${MODE} job ${i}/${N}: ${JID}" >&2
     PREV="${JID}"

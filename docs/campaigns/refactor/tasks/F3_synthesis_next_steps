@@ -1,0 +1,336 @@
+# F3 — Synthesise the campaign; recommend what to do next
+
+| | |
+| --- | --- |
+| **Phase** | F |
+| **Depends on** | F2 (`PROCEED: YES` or `YES-WITH-CAVEATS`), and a result file for every prior task |
+| **Base branch** | `epic/refactor` |
+| **Budget** | 3 h |
+| **Touches** | `docs/campaigns/refactor/handoff-2026-09-refactor.md` (new), `docs/PROJECT_STATE.md` (one pointer line) |
+| **Must not touch** | any `.py`, `.yaml`, `.slurm` or `.sh` file. Any `results/*.md` — they are the permanent record and are read-only to you. `00_`–`04_`, `QUESTIONS.md`, or any task file. |
+
+## Objective
+
+Produce one self-contained document that a person picking this project up cold —
+with no memory of this campaign and no other briefing — can read in twenty
+minutes and come away knowing what happened, what is true now, what is still
+broken, and what to do next.
+
+It ends with a **prioritised, argued recommendation** for the next campaign, not
+a list of leftovers.
+
+## Why this is a separate task
+
+Eighteen result files is a lot of evidence and nobody reads eighteen files. The
+specific thing that gets lost is the **Observations** section: every task was
+told to record what it noticed outside its scope and move on, which means real
+discoveries are scattered across eighteen documents that will never be opened
+again. Consolidating them is most of this task's value.
+
+The other half is that nobody has yet been asked to look at the campaign as a
+whole and say what it implies. Every task so far has been deliberately narrow.
+This is the one that is allowed to take a position.
+
+## What this document is, and what it is not
+
+**It is a handoff note.** Read `cleanup-2026-09.md` before you start — it is the
+document that primed *this* campaign, and yours is its successor. Match its
+register: direct, numerate, willing to say "unconfirmed", and honest about which
+parts are sketch.
+
+Note how it opens:
+
+> **Status:** draft handoff note, September 2026. Written to prime a fresh
+> working context. Not authoritative — the "Plan going forward" section in
+> particular is a sketch to be expanded.
+
+**Yours must open the same way, and mean it.** This document is a synthesis and
+a set of recommendations. It is explicitly **not** the source of truth. The
+durable truth lives in three places, and your document says so near the top:
+
+| Truth | Lives in |
+| --- | --- |
+| What the system is and what it guarantees | `docs/SPEC.md` |
+| What the code actually does | `tests/` |
+| What was measured, by whom, when | `docs/campaigns/refactor/results/` |
+
+Someone acting on your recommendations should be able to verify every claim
+against one of those three. Make that easy: cite the result file or the test by
+name whenever you assert something.
+
+**The consequence for how you write:** it is better to be useful and clearly
+labelled than to be cautious and vague. A recommendation you argue for and mark
+`RECOMMENDED` is worth more than a hedge. But a guess presented as a finding
+poisons the whole document, because a reader who catches one stops trusting all
+of it.
+
+## What you may assume
+
+- Eighteen result files exist under `results/`: `A1`–`A4`, `B1`, `B2`, `C1`–`C4`,
+  `D1`–`D3`, `E1`–`E3`, `F1`, `F2`.
+- `QUESTIONS.md` holds `Q-01`–`Q-08` plus anything agents appended. Some will be
+  unanswered.
+- `docs/PROJECT_STATE.md` (F1) and `docs/findings/2026-09-zeroed-statics.md` (B2)
+  exist.
+- `00_CONTEXT.md` §5 lists what this campaign put out of scope. That list is the
+  raw material for your recommendations, not a constraint on them.
+- The campaign's **own plan will have been wrong in places**. That is expected —
+  `00_CONTEXT.md` Lesson 7 is about exactly this. Recording where it was wrong is
+  a deliverable, not a criticism.
+
+## Confidence labelling
+
+Use three labels throughout, and use them on every non-obvious claim:
+
+| Label | Means |
+| --- | --- |
+| **MEASURED** | A number or observation taken from a result file or a test. Cite the source. |
+| **INFERRED** | A conclusion drawn from measurements. Say which measurements and what the reasoning was. |
+| **RECOMMENDED** | Your judgement about what to do. Say what you considered and rejected. |
+
+A section with no labels reads as fact. That is the failure mode to avoid.
+
+## The document — required sections
+
+Write to `docs/campaigns/refactor/handoff-2026-09-refactor.md`. Target **300–500
+lines**. Longer is not better; `cleanup-2026-09.md` did its job in 294.
+
+### 1. Status block and what this is
+
+The header, in the register described above. Include: date, the base branch, the
+commit SHA at the end of the campaign, and the three-row truth table.
+
+### 2. What the project is
+
+Two paragraphs, self-contained, assuming no prior knowledge. Aurora fine-tuning
+for MJO sub-seasonal prediction, the r > 0.5 at 30 days target, the machine, the
+data. A reader who has never seen this repo should be able to follow section 10
+after reading only this.
+
+### 3. What this campaign did
+
+One table, eighteen rows: task, one-line outcome, final status. Then two or
+three paragraphs on the shape of it — what the campaign was for, what the two
+gates were, whether they held.
+
+Do not narrate each task. The table is the narration.
+
+### 4. The state now
+
+What a person gets when they clone. Layout, how to install, the one command that
+defines done, how to run a smoke test, how to submit a job. Test counts by
+category from D2/D3/F2. Whether `uv` works on Perlmutter, plainly, without
+euphemism.
+
+### 5. The numbers
+
+Everything MEASURED, in tables. At minimum: B1 vs C4 vs F2 comparisons;
+parameter counts by mode; sample counts; static-variable statistics; the
+non-finite-gradient skip ratio from F2; peak memory and step time; test counts;
+the type-checker exclusion list length.
+
+This is the section a reader scrolls back to. Make it dense and make every row
+cite its source.
+
+### 6. What was ruled out
+
+A hypothesis eliminated is worth as much as one confirmed, and this is the
+section that stops the next campaign re-running a dead end. Pull from every
+result file's "What was ruled out" section.
+
+**B2's verdict belongs here and is the most consequential single line in the
+document**: were the July runs affected by the zeroed-statics bug, and therefore
+does any prior result on this project mean anything? State it in one sentence,
+label it, and point at `docs/findings/2026-09-zeroed-statics.md`.
+
+### 7. What is still broken
+
+Two lists, kept separate because they mean different things.
+
+**Inherited and deliberately not fixed** — from `00_CONTEXT.md` §5: Findings 3,
+5 and 6; the PLACEHOLDER `msl` normalisation statistics; small-vs-full Aurora;
+`slt_data.nc` on purgeable scratch. For each: what it is, why it was out of
+scope, and what it blocks.
+
+**Discovered during the campaign** — this is the Observations harvest. Read the
+Observations section of **all eighteen** result files and consolidate. Expect
+duplicates across tasks; merge them. Expect some to be trivial; say so and drop
+them rather than padding the list. For each survivor: which task noticed it,
+what it affects, and whether it is worth acting on.
+
+Also consolidate every **AMBER caveat** from every result file. A caveat is by
+definition something unresolved that someone decided not to block on, and they
+accumulate invisibly.
+
+### 8. What the campaign got wrong
+
+Planning errors, bad budget estimates, assumptions in `00_`–`04_` that turned out
+to be false, tasks that were scoped wrongly, gates that fired or should have.
+
+Specific things to check rather than assume:
+
+- Did the sample-count arithmetic in `03_DOMAIN_PRIORS.md` §1 survive contact
+  with real and synthetic data? D1 and D3 both tested it.
+- Was the `aurora` / `aurora_mjo` collision real, or was the precaution
+  unnecessary? C1 would know.
+- Which budgets were badly wrong, in which direction?
+- Did any task's "Must not touch" list turn out to be wrong — either too tight
+  to do the work, or too loose to prevent a collision?
+- Did C4 or F2 catch anything, or did they pass trivially? A gate that has never
+  caught anything is worth examining.
+
+Write this plainly and without defensiveness. The next planner is the audience
+and the point is to make their plan better.
+
+### 9. Open questions
+
+Every `Q-nn` still unanswered, with what it now blocks — which may have changed
+since it was raised. Plus any question the campaign raised and did not record as
+a `Q-nn`.
+
+For each, restate the proposed default and say whether the campaign's experience
+strengthens or weakens it.
+
+### 10. Recommended next steps
+
+**The section the document exists for.** Everything above is input to this.
+
+Produce a **prioritised sequence**, not a backlog. For each item:
+
+- what it is, in one sentence
+- why it is at that position — what it unblocks, or what it depends on
+- roughly what it costs
+- what evidence supports doing it, cited
+- your confidence, and what would change your mind
+
+Then propose the **shape of the next campaign**: a name, a base branch, and
+three to five phases with a sentence each. Enough that someone can create the
+directory from `_TEMPLATE/` and start filling it in.
+
+Some things you should weigh, in no particular order — this is a prompt for your
+judgement, not a ranking to copy out:
+
+- The real `ps` normalisation statistics. `02_UPSTREAM_CONTRACT.md` §4.1 makes
+  the case that nothing scientific is trustworthy until these exist; F2's skip
+  ratio is the evidence for or against that.
+- Findings 3, 5 and 6. Finding 5 needs a **human scientific decision** — the
+  physics-informed mode freezes the whole backbone, so the moisture-budget loss
+  scores fields whose decoders cannot learn. Do not recommend an implementation
+  for something that first needs a decision; recommend the decision.
+- Small vs full Aurora, which was chosen under deadline pressure and flagged
+  provisional. `03_DOMAIN_PRIORS.md` §7 has the memory numbers, and they
+  interact with the gradient-checkpointing crash.
+- Whether the ~41k trainable parameters are the right training surface at all.
+- The RMM and evaluation code, if C3 reported AMBER on splitting it — 1,637
+  lines with no test coverage, in exactly the place a leakage bug would hide.
+- `slt_data.nc` on purgeable scratch (Q-07).
+- Reducing the type-checker exclusion list.
+
+**Be willing to say which single thing matters most and argue for it.** A
+prioritised list where everything is important is not a prioritisation. If you
+genuinely cannot separate the top two, say so and give the human the criterion
+that would separate them.
+
+### 11. Recovery points and what must not be deleted
+
+Carry forward `cleanup-2026-09.md` §8's table, updated: backup tags,
+`wip/snapshot/*` tags, and `origin/archive/pre-antigravity-baseline` — remote
+only, never merged, **do not delete**. Add anything this campaign created that
+matters: `epic/refactor`, the B1 fixtures, `docs/archive/metrics/`.
+
+### 12. Where to go from here
+
+A short pointer section. `docs/SPEC.md` for what the system is, `AGENTS.md` for
+how to work in it, `docs/PROJECT_STATE.md` for the current next action,
+`results/` for the evidence behind any claim in this document.
+
+## Steps
+
+1. Read all eighteen result files, `QUESTIONS.md`, `docs/PROJECT_STATE.md`,
+   `docs/findings/2026-09-zeroed-statics.md`, and `cleanup-2026-09.md`. Read
+   `00_`–`04_` again — you need to know what was *promised* to judge what was
+   delivered.
+
+   **Take notes as you go into the document itself.** Do not read everything and
+   then start writing; a task that dies at minute 150 of a 180-minute budget with
+   nothing written has destroyed all of its own value.
+
+2. Build the Observations harvest first, before writing prose. A flat list of
+   every Observation and every AMBER caveat with its source task. Then merge
+   duplicates and drop trivia. This list is the input to sections 7 and 10 and
+   it is the thing most likely to be skimped if you leave it until last.
+
+3. Build the numbers tables (section 5). These are transcription, they are
+   quick, and having them in front of you makes sections 6–10 much easier to
+   write honestly.
+
+4. Write sections 1–9.
+
+5. Write section 10 last, when you have everything. Re-read your own section 7
+   and section 8 immediately before writing it.
+
+6. Verify every citation. Every claim labelled MEASURED must name a result file
+   or a test that actually exists. Spot-check at least ten, and say in your
+   result file which ten and whether they checked out.
+
+7. Add one line to `docs/PROJECT_STATE.md` pointing at this document, under
+   **Next action** or immediately below it, so the document is findable after
+   this campaign directory is archived. **Change nothing else in that file.**
+
+8. Re-read your document end to end as if you had never seen this project.
+   Anything you cannot follow without opening another file is a gap — fix it or
+   say in the document that it is a gap.
+
+## Definition of Done
+
+- [ ] All eighteen result files read, plus `QUESTIONS.md`, `PROJECT_STATE.md`,
+      the B2 finding, and `cleanup-2026-09.md` — confirmed by listing them
+- [ ] `docs/campaigns/refactor/handoff-2026-09-refactor.md` written, 300–500
+      lines, all twelve sections present
+- [ ] The status block says plainly that the document is a synthesis and not the
+      source of truth, and carries the three-row truth table
+- [ ] Every non-obvious claim carries **MEASURED / INFERRED / RECOMMENDED**
+- [ ] Section 3's eighteen-row task table complete with final statuses
+- [ ] Section 5's numbers tables cite a source per row
+- [ ] Section 6 states B2's verdict in one sentence with its label
+- [ ] Section 7 separates inherited from discovered, and the Observations
+      harvest covers **all eighteen** result files — state how many raw
+      Observations were found, how many survived merging, and how many were
+      dropped as trivial
+- [ ] Every AMBER caveat in the campaign is consolidated into section 7
+- [ ] Section 8 answers all five "check rather than assume" questions
+- [ ] Section 9 covers every unanswered `Q-nn` with its *current* blocking
+      status
+- [ ] Section 10 is a prioritised sequence with cost, evidence, confidence and
+      "what would change my mind" per item
+- [ ] Section 10 names **one** thing as mattering most and argues for it — or
+      explains why two cannot be separated and gives the criterion that would
+- [ ] Section 10 proposes a next-campaign name, base branch and 3–5 phases
+- [ ] Section 11's recovery table carries forward `cleanup-2026-09.md` §8 and
+      adds this campaign's artifacts
+- [ ] Ten citations spot-checked; which ten, and the outcome, recorded
+- [ ] One pointer line added to `docs/PROJECT_STATE.md`; nothing else changed —
+      `git diff docs/PROJECT_STATE.md` pasted
+- [ ] `uv run python scripts/check.py` green — summary table pasted
+- [ ] Result file written from `results/_TEMPLATE.md`
+
+## Out of scope
+
+- **Any code, config, test or script change.** This task reads and writes one
+  markdown file plus one line of another. If you find a bug while reading, it
+  goes in section 7 — that is what section 7 is for.
+- **Editing any `results/*.md`.** They are the permanent record of what each
+  agent measured at the time, including where they turned out to be wrong. If a
+  result file contains a claim later measurement contradicted, say so in section
+  8 with both sources. Do not correct it at source — that destroys the trail.
+- Editing `00_`–`04_`, `QUESTIONS.md` or any task file. If `03_DOMAIN_PRIORS.md`
+  turned out to be wrong, that is a finding for section 8 and material for
+  `docs/SPEC.md` in the next campaign, not an edit here.
+- Rewriting `docs/PROJECT_STATE.md` beyond the one pointer line. F1 owns it and
+  F2 updated its status table.
+- Answering any `Q-nn` yourself. Restate, assess, recommend — the human answers.
+- **Starting the next campaign.** Do not create a directory under
+  `docs/campaigns/`, do not write task files, do not create a branch. Section 10
+  proposes; a human decides.
+- Moving this campaign directory to `docs/archive/campaigns/`. That happens when
+  the human merges `epic/refactor` to `main`.
