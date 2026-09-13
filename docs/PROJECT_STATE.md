@@ -11,6 +11,8 @@
 
 **Justification:** The placeholder normalisation constants derived from Aurora's built-in `sp` statistics were adopted as a temporary unblocking measure (Lesson 1); replacing them with true dataset statistics is the final prerequisite for scientifically trustworthy baseline training and evaluation.
 
+*Campaign Synthesis & Next Steps:* See [`docs/campaigns/refactor/handoff-2026-09-refactor.md`](campaigns/refactor/handoff-2026-09-refactor.md) for full campaign synthesis, observations harvest, and recommended forward roadmap.
+
 ---
 
 ## 2. Status at a Glance
