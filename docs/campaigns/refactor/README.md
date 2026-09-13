@@ -108,6 +108,14 @@ task's preconditions say caveats are acceptable).
 | --- | --- | --- |
 | [`F1`](tasks/F1_documentation.md) | `SPEC`, `SETUP`, `ARCHITECTURE`, `CLI`, `PROJECT_STATE`; README; stale refs | E1, E2, E3 |
 | [`F2`](tasks/F2_acceptance.md) | Acceptance on Perlmutter: smoke test end-to-end under the new CLI | F1 |
+| [`F3`](tasks/F3_synthesis_and_next_steps.md) | Synthesise the campaign; recommend what to do next | F2, and every prior result file |
+
+> **F3 is the campaign's exit document.** It consolidates eighteen result files —
+> in particular the **Observations**, which is where every task was told to
+> record what it noticed outside its scope and move on, and which nobody reads
+> again unless someone is asked to. It ends with an argued recommendation for the
+> next campaign. It is a handoff note, not a source of truth: the durable record
+> stays in `docs/SPEC.md`, `tests/` and `results/`.
 
 ### Parallelism
 
