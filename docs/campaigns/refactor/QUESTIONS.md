@@ -25,6 +25,8 @@ and say so in your result file.**
 
 ---
 
+*Note: Qq.-01--11 were answered by a human **post** task F2, on 2026-09-13.*
+
 ## Q-01 — Package name: `aurora_mjo`, given the collision with `microsoft-aurora`?
 
 **Raised by:** campaign authoring, 2026-09-10
@@ -44,7 +46,7 @@ so nothing else needs renaming. Alternatives considered and rejected: `mjo`
 (unsearchable), and vendoring the Microsoft package under a different name (a
 fork's worth of maintenance for a cosmetic gain).
 
-**ANSWER (human, YYYY-MM-DD):**
+**ANSWER (human, 2026-09-13):** Go with your proposed default.
 
 ---
 
@@ -68,7 +70,7 @@ access, flip these three to agent tasks — nothing else changes. Note that B1 i
 the campaign's primary gate, so there is an argument for a human running it
 regardless of capability.
 
-**ANSWER (human, YYYY-MM-DD):**
+**ANSWER (human, 2026-09-13):** All run on Permlutter.
 
 ---
 
@@ -97,7 +99,7 @@ If `uv` genuinely cannot work on Perlmutter, the fallback is `uv` for
 development and CI plus a generated `requirements.txt` pinned from `uv.lock` for
 the cluster. **Do not** decide that unilaterally; raise it.
 
-**ANSWER (human, YYYY-MM-DD):**
+**ANSWER (human, 2026-09-13):** It appears to be working okay.
 
 ---
 
@@ -115,7 +117,7 @@ deprecation notice naming the `run.py` equivalent and `exec`s it with `argv`
 preserved. Remove it in a later campaign. Cost: six lines. See
 `01_TARGET_STATE.md` D8.
 
-**ANSWER (human, YYYY-MM-DD):**
+**ANSWER (human, 2026-09-13):** Sounds good, we can explore in a later campaign.
 
 ---
 
@@ -134,7 +136,7 @@ If it does not work on 3.10, use `mypy` with the same ratchet scope
 way the gate step is named `types` in `check.py` so the tool can be swapped
 without changing the contract.
 
-**ANSWER (human, YYYY-MM-DD):**
+**ANSWER (human, 2026-09-13):** Go with proposed default.
 
 ---
 
@@ -159,7 +161,7 @@ Note the template's `standards-drift` and `runtime-deps` CI jobs are **not**
 adopted: there is no org standards URL for this repo, and the runtime-deps job
 would need to install torch on every run.
 
-**ANSWER (human, YYYY-MM-DD):**
+**ANSWER (human, 2026-09-13):** This is not within an org. My thought is that because it is a research development repo, then we do not need CI.
 
 ---
 
@@ -181,7 +183,7 @@ records the relocation as an open item in `docs/PROJECT_STATE.md`. The human
 decides whether "durable" means `$HOME`, a CFS project directory this repo owns,
 or committed provenance plus a regeneration script.
 
-**ANSWER (human, YYYY-MM-DD):**
+**ANSWER (human, 2026-09-13):** It lives in `/pscratch/sd/k/kam352/Aurora/slt/`
 
 ---
 
@@ -206,7 +208,7 @@ it reports **AMBER**, leaves them in `scripts/`, and the split becomes its own
 task in a follow-on campaign. Explicitly acceptable outcome — say so plainly
 rather than half-doing it.
 
-**ANSWER (human, YYYY-MM-DD):**
+**ANSWER (human, 2026-09-13):** Go with proposed default.
 
 ---
 
@@ -216,7 +218,7 @@ rather than half-doing it.
 **Blocks:** nothing — proceeding on default.
 **Proposed default:** Use `epic/refactor-<TASK_ID>-<short-slug>` rather than `epic/refactor/<TASK_ID>-<short-slug>`. In standard Git storage, because `epic/refactor` exists as a branch ref file (`.git/refs/heads/epic/refactor`), Git rejects creating any sub-ref `epic/refactor/*` due to directory/file collision (`fatal: cannot lock ref 'refs/heads/epic/refactor/...': 'refs/heads/epic/refactor' exists`). Replacing the slash with a hyphen keeps the branch grouped under `epic/` without conflicting with the base branch name.
 
-**ANSWER (human, YYYY-MM-DD):**
+**ANSWER (human, 2026-09-13):** Go with proposed default.
 
 ---
 
@@ -226,7 +228,7 @@ rather than half-doing it.
 **Blocks:** nothing — proceeding on default.
 **Proposed default:** Standardize `UV_CACHE_DIR=/pscratch/sd/k/kam352/.cache/uv`, `UV_PYTHON_INSTALL_DIR=/pscratch/sd/k/kam352/.local/share/uv/python`, and `UV_DATA_DIR=/pscratch/sd/k/kam352/.local/share/uv` in shell startup scripts (`~/.bashrc` and `~/.local/bin/env`). Measurement during A1 proved that `uv` can install and run cleanly on Perlmutter (Python 3.10.21, torch 2.5.1+cu121 with 4 GPUs detected), but default paths in `/global/homes` trigger OS error 524 (flock unsupported on GPFS/Lustre). Moving cache and python directories to `/pscratch` completely resolves the locking issue.
 
-**ANSWER (human, YYYY-MM-DD):**
+**ANSWER (human, 2026-09-13):** Go with proposed default.
 
 ---
 
@@ -236,6 +238,6 @@ rather than half-doing it.
 **Blocks:** nothing — proceeding on default.
 **Proposed default:** Standardize `PRE_COMMIT_HOME=/pscratch/sd/k/kam352/.cache/pre-commit`, `VIRTUALENV_APP_DATA=/pscratch/sd/k/kam352/.cache/virtualenv`, `GOCACHE=/pscratch/sd/k/kam352/.cache/go-build`, and `GOPATH=/pscratch/sd/k/kam352/go` in `~/.bashrc`. On Perlmutter, `pre-commit`, `virtualenv`, and `go` (used for Gitleaks) attempt to acquire file locks in `$HOME/.cache/*` by default, triggering `OSError: [Errno 524] Unknown error 524` because `flock` is unsupported on Lustre/GPFS home mounts. Redirecting their caches to `/pscratch` allows pre-commit environments to build and run cleanly.
 
-**ANSWER (human, YYYY-MM-DD):**
+**ANSWER (human, 2026-09-13):** Go with proposed default.
 
 ---
