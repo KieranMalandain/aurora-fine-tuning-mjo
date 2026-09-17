@@ -125,33 +125,31 @@ Three that catch specific, silent errors:
 
 ---
 
-## 4. Normalisation scales — what G3 should roughly reproduce
+## 4. Normalisation scales — measured in G3 (1980–2015, 1° ERA5)
 
-Aurora's built-ins, which G3's ERA5-derived statistics should land near. **A
-large disagreement is a finding, not automatically a bug** — Aurora's constants
-were computed on its own corpus, not on this archive — but a factor-of-two
-disagreement on a common variable means check the accumulator first.
+True training-period (1980–2015) normalisation statistics computed across all 4,752 files (3,408,220,800
+samples per field) at native 1° resolution via Welford accumulation (`configs/norm_stats_1980_2015.yaml`).
 
-| Variable | Aurora σ | Provenance |
-| --- | ---: | --- |
-| `2t` | 21.220 | **MEASURED** — `aurora/normalisation.py`, v1.8.0 |
-| `10u` | 5.548 | as above |
-| `10v` | 4.765 | as above |
-| `msl` | 1,332.246 | as above — **MSL-calibrated, wrong for `ps`. Lesson 1.** |
-| `z` (static) | 58,844.67 | as above |
-| `z` (13-level mean) | 3,828.21 | **DERIVED** from per-level constants |
-| `t` (13-level mean) | 12.378 | as above |
-| `u` (13-level mean) | 12.748 | as above |
-| `v` (13-level mean) | 8.911 | as above |
-| `q` (13-level mean) | 0.0016364 | as above |
+| Variable | Aurora Built-in σ | G3 Measured σ | Rel Diff (%) | Provenance & Notes |
+| --- | ---: | ---: | ---: | --- |
+| `2t` | 21.220 | **21.2352** | +0.07% | **MEASURED** — G3 Welford |
+| `10u` | 5.548 | **5.4905** | -1.04% | **MEASURED** — G3 Welford |
+| `10v` | 4.765 | **4.7146** | -1.06% | **MEASURED** — G3 Welford |
+| `msl` (= `ps`) | 1,332.246 | **9,504.4086** | **+613.41%** | **MEASURED** — **Lesson 1 proxy divergence** (>30% threshold). Archive supplies `ps`, not MSL. |
+| `z` (13-level mean) | 3,828.21 | **3,827.7773** | -0.01% | **MEASURED** — G3 per-level mean |
+| `t` (13-level mean) | 12.378 | **12.3761** | -0.02% | **MEASURED** — G3 per-level mean |
+| `u` (13-level mean) | 12.748 | **12.7057** | -0.33% | **MEASURED** — G3 per-level mean |
+| `v` (13-level mean) | 8.911 | **8.8704** | -0.46% | **MEASURED** — G3 per-level mean |
+| `q` (13-level mean) | 0.0016364 | **0.0016362** | -0.01% | **MEASURED** — G3 per-level mean |
+| `ttr` | — | **49.2100** | — | **MEASURED** (mean = -226.0305 W m⁻²) |
+| `tcwv` | — | **16.3142** | — | **MEASURED** (mean = 18.2790 kg m⁻²) |
 
-Per-level `q` runs `3.57 × 10⁻⁷` at 50 hPa to `5.91 × 10⁻³` at 1000 hPa
-(**MEASURED**). Any G3 output that does not show that spread has averaged over
-levels somewhere it should not have.
+### Evaluation of Divergences:
+1. **Unmodified ERA5 variables**: All standard variables (`2t`, `10u`, `10v`, `z`, `t`, `u`, `v`, `q`) reproduce Aurora's built-in scales to within **1.06%** relative deviation. The Welford accumulator is exact and fully concordant.
+2. **`msl` divergence**: Exceeds the 30% threshold significantly (+613.41%), as predicted by Lesson 1. Aurora's built-in 1332.25 is sea-level-pressure calibrated; this archive provides surface pressure (`ps` mean 96,668.75 Pa, std 9,504.41 Pa), which varies dramatically across surface orography.
+3. **Atmospheric `q` spread**: Confirmed spanning four orders of magnitude from **`3.59 × 10⁻⁷`** kg kg⁻¹ at 50 hPa to **`5.90 × 10⁻³`** kg kg⁻¹ at 1000 hPa (a 16,418× spread).
 
-Current placeholders, to be **replaced** by G3: `msl` mean 96,667.9822 / std
-9,504.6359 (Aurora's own `sp` stats, not this dataset); `ttr` mean −226.0498 /
-std 49.2158; `tcwv` mean 18.2967 / std 16.3265.
+Placeholder constants (96,667.9822 / 9,504.6359) in `configs/unified.yaml` are **fully retired** and replaced by true values.
 
 ---
 

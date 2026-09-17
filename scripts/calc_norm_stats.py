@@ -1,167 +1,51 @@
 #!/usr/bin/env python3
 # scripts/calc_norm_stats.py
-"""
-Compute mean/std normalization statistics, over the TRAINING years only,
-for the surface variables that need them injected into Aurora's global
-normalisation tables (`aurora.normalisation.locations` / `.scales`):
+"""Compute mean/std normalization statistics over the training years (1980–2015).
 
-  - ttr, tcwv: injected variables with no pretrained Aurora entry at all.
-  - msl:       AURORA_MJO_GAMEPLAN FIX 2. dataset.py maps 'msl' to LANL's
-               surface-pressure ('ps') field as a proxy (true MSL is not in
-               the LANL archive), but Aurora's *built-in* 'msl' stats are
-               MSL-calibrated (mean~100958, scale~1332). Using them on ps
-               values drives every high-terrain input to ~-36 sigma -
-               the confirmed trigger for the 100%-non-finite validation
-               (see AURORA_MJO_GAMEPLAN.md §Finding 1). This script computes
-               the correct ps-based mean/std so it can override that entry.
+Thin CLI delegating computation to `aurora_mjo.stats.compute_norm_stats`.
+Computes true normalisation statistics at native 1° resolution for:
+  - Surface variables: 2t, 10u, 10v, msl (ps proxy), ttr (mtnlwrf), tcwv
+  - Atmospheric variables: z, q, t, u, v across all 13 Aurora pressure levels
 
-RECONSTRUCTION NOTE
-====================
-This file was not present in the uploaded working set handed to the worker
-agent; only the AURORA_MJO_GAMEPLAN.md description of the diff (FIX 2a) was
-available. This is therefore a from-scratch reconstruction, not a literal
-patch of the real script. It reuses the exact same file-discovery pattern
-already proven working in `src/dataset.py::_collect_var_files` and
-`scripts/diagnose_val_nan.py::_collect`, and the ttr/tcwv path/native-name
-pairs match the values already trusted and in use in `configs/unified.yaml`
-(mean=-226.0498/std=49.2158 for ttr, mean=18.2967/std=16.3265 for tcwv) as a
-sanity check once it's run for real on NERSC. **Before trusting the msl
-output for a real training run, diff this file against the original on
-disk (if it still exists in the repo) and reconcile any differences.**
-
-Usage (Task A2, from an allocation with NERSC filesystem access):
-
-    python scripts/calc_norm_stats.py --config configs/unified.yaml
-
-    # Override the years or a single variable for a quick check:
-    python scripts/calc_norm_stats.py --config configs/unified.yaml \
-        --variables msl --years 1980 2015
-
-Output: prints computed mean/std per variable AND writes them to
-`scripts/computed_norm_stats.yaml` as a ready-to-paste snippet for
-`configs/unified.yaml`'s `model.norm_stats` block.
+Usage:
+    python scripts/calc_norm_stats.py
+    python scripts/calc_norm_stats.py --years 1980 2015 --workers 32
+    python scripts/calc_norm_stats.py --variables msl ttr tcwv
 """
 
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
-import numpy as np
 import yaml
+
+import aurora_mjo.env  # noqa: F401 - set HDF5_USE_FILE_LOCKING=FALSE
+from aurora_mjo.stats import compute_norm_stats
 
 DEFAULT_ROOT = (
     "/global/cfs/cdirs/m4946/xiaoming/zm4946.MachLearn/PrcsPrep/"
     "prcs.ERA5/prcs.ERA5.Remap/Results"
 )
 
-# {aurora_name: (step_subdir, native_var_name)} — must match src/dataset.py's
-# SURFACE_VAR_MAP path/native-name pairs exactly, or the computed stats won't
-# match what the dataloader actually feeds the model.
-VARIABLES_TO_CALC = {
-    "msl": ("Step02/ERA5.remap_180x360MODIS_6hrInst/PS", "ps"),
-    "ttr": ("Step03/ERA5.remap_180x360MODIS_6hrInst/meanTNLWFLX", "mtnlwrf"),
-    "tcwv": ("Step02/ERA5.remap_180x360MODIS_6hrInst/tcwv", "tcwv"),
-}
 
-
-def _collect_files(root: Path, step_subdir: str, y0: int, y1: int) -> list[Path]:
-    """Same over-match-then-filter discovery pattern as dataset.py /
-    diagnose_val_nan.py: try the per-year subdirectory first, fall back to a
-    root-level glob containing the year string."""
-    var_dir = root / step_subdir
-    files: list[Path] = []
-    for year in range(y0, y1 + 1):
-        year_dir = var_dir / str(year)
-        matched = sorted(year_dir.glob("*.nc"))
-        if not matched:
-            matched = sorted(var_dir.glob(f"*{year}*.nc"))
-        files.extend(matched)
-    seen, uniq = set(), []
-    for f in files:
-        if f not in seen:
-            seen.add(f)
-            uniq.append(f)
-    return uniq
-
-
-class _Welford:
-    """Numerically-stable single-pass mean/variance accumulator.
-
-    Streams file-by-file so we never hold more than one file's array in
-    memory at a time - required at this data volume (36 years x ~1460
-    timesteps x 180x360 per variable).
-    """
-
-    __slots__ = ("m2", "mean", "n")
-
-    def __init__(self):
-        self.n = 0
-        self.mean = 0.0
-        self.m2 = 0.0
-
-    def update_batch(self, values: np.ndarray):
-        values = values.astype(np.float64).ravel()
-        values = values[np.isfinite(values)]
-        if values.size == 0:
-            return
-        batch_n = values.size
-        batch_mean = float(values.mean())  # native float — numpy scalars poison
-        batch_var = float(values.var())  # self.mean/m2 into np.float64 forever
-        # otherwise, which yaml.safe_dump cannot serialize downstream.
-
-        new_n = self.n + batch_n
-        delta = batch_mean - self.mean
-        self.mean += delta * batch_n / new_n
-        self.m2 += batch_var * batch_n + delta**2 * self.n * batch_n / new_n
-        self.n = new_n
-
-    @property
-    def std(self) -> float:
-        return float(np.sqrt(self.m2 / max(self.n, 1)))
-
-
-def compute_stats(root: Path, y0: int, y1: int, variables: dict) -> dict:
-    import xarray as xr  # deferred: heavy import, only needed for real runs
-
-    results = {}
-    for aurora_name, (step_subdir, native_name) in variables.items():
-        files = _collect_files(root, step_subdir, y0, y1)
-        if not files:
-            print(
-                f"  [{aurora_name}] WARNING: no files found under "
-                f"{root / step_subdir} for {y0}-{y1}; skipping."
-            )
-            continue
-        acc = _Welford()
-        for i, f in enumerate(files):
-            with xr.open_dataset(str(f), engine="netcdf4") as ds:
-                if native_name not in ds:
-                    print(
-                        f"  [{aurora_name}] WARNING: '{native_name}' not in "
-                        f"{f.name}; skipping this file."
-                    )
-                    continue
-                arr = ds[native_name].values
-            acc.update_batch(arr)
-            if (i + 1) % 20 == 0 or (i + 1) == len(files):
-                print(
-                    f"  [{aurora_name}] {i + 1}/{len(files)} files | "
-                    f"running mean={acc.mean:.4f} std={acc.std:.4f}"
-                )
-        results[aurora_name] = {
-            "mean": round(float(acc.mean), 4),
-            "std": round(float(acc.std), 4),
-        }
-        print(
-            f"  [{aurora_name}] FINAL: mean={acc.mean:.4f} std={acc.std:.4f} "
-            f"(n={acc.n:,} finite values, native='{native_name}')"
+def _get_git_sha() -> str:
+    try:
+        res = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
         )
-    return results
+        return res.stdout.strip()
+    except Exception:
+        return "unknown"
 
 
-def main():
+def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -182,9 +66,19 @@ def main():
         "--variables",
         nargs="+",
         default=None,
-        help="Subset of VARIABLES_TO_CALC to compute, e.g. --variables msl.",
+        help="Subset of variables to compute, e.g. --variables msl ttr tcwv.",
     )
-    ap.add_argument("--out", default="scripts/computed_norm_stats.yaml")
+    ap.add_argument(
+        "--out",
+        default="configs/norm_stats_1980_2015.yaml",
+        help="Output YAML path (default: configs/norm_stats_1980_2015.yaml).",
+    )
+    ap.add_argument(
+        "--workers",
+        type=int,
+        default=16,
+        help="Number of worker processes for parallel file processing (default: 16).",
+    )
     args = ap.parse_args()
 
     cfg = {}
@@ -192,10 +86,6 @@ def main():
     if cfg_path.exists():
         with open(cfg_path) as f:
             cfg = yaml.safe_load(f) or {}
-    else:
-        print(
-            f"WARNING: config '{args.config}' not found; using CLI overrides / defaults only."
-        )
 
     root = Path(args.root or cfg.get("data", {}).get("root", DEFAULT_ROOT))
     if args.years:
@@ -206,37 +96,80 @@ def main():
         )
         y0, y1 = train_years[0], train_years[1]
 
-    variables = VARIABLES_TO_CALC
+    print("======================================================================")
+    print(f"Computing 1° Normalisation Statistics: Years {y0}–{y1}")
+    print(f"Archive Root: {root}")
+    print(f"Workers:      {args.workers}")
     if args.variables:
-        variables = {k: v for k, v in VARIABLES_TO_CALC.items() if k in args.variables}
-        missing = set(args.variables) - set(variables)
-        if missing:
-            print(f"WARNING: unknown variable(s) requested and ignored: {missing}")
+        print(f"Variables:    {args.variables}")
+    else:
+        print("Variables:    ALL (6 surface variables + 5 atmos variables x 13 levels)")
+    print("======================================================================\n")
 
-    print(f"Computing norm stats over TRAINING years {y0}-{y1} from root={root}")
-    print(f"Variables: {list(variables)}\n")
+    results = compute_norm_stats(
+        root=root,
+        start_year=y0,
+        end_year=y1,
+        variables=args.variables,
+        num_workers=args.workers,
+    )
 
-    results = compute_stats(root, y0, y1, variables)
+    git_sha = _get_git_sha()
+    iso_date = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-    print("\n" + "=" * 70)
-    print("RESULTS - paste into configs/unified.yaml's model.norm_stats block:")
-    print("=" * 70)
-    for name, stats in results.items():
-        print(f"    {name}:  {{ mean: {stats['mean']}, std: {stats['std']} }}")
+    provenance_metadata = {
+        "generated_date": iso_date,
+        "git_commit": git_sha,
+        "year_range": [y0, y1],
+        "total_files_read": results["total_files_read"],
+        "archive_root": str(root),
+        "grid_resolution": "1.0 degree (180x360)",
+        "method": "Welford parallel reduction (Chan 1979) via aurora_mjo.stats",
+    }
+
+    output_payload = {
+        "metadata": provenance_metadata,
+        "surface": results["surface"],
+        "atmos": results["atmos"],
+        "norm_stats": results["norm_stats"],
+    }
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(out_path, "w") as f:
-        yaml.safe_dump({"norm_stats": results}, f, sort_keys=False)
-    print(f"\nAlso written to {out_path}")
 
-    if "msl" not in results:
-        print(
-            "\nNOTE: msl stats were not computed. Training will keep using the "
-            "FIX-2 fallback (Aurora sp stats: mean=96647.375, std=9586.6914) "
-            "already placed in configs/unified.yaml until you run this "
-            "script successfully and paste the real numbers in."
-        )
+    header_comment = (
+        f"# Normalisation Statistics (1980–2015 Native 1° ERA5)\n"
+        f"# Generated:   {iso_date}\n"
+        f"# Commit:      {git_sha}\n"
+        f"# Year Range:  [{y0}, {y1}]\n"
+        f"# Files Read:  {results['total_files_read']}\n"
+        f"# Archive:     {root}\n"
+        f"# Description: Population mean and standard deviation (ddof=0) computed\n"
+        f"#              via streaming Welford accumulation across all 1980–2015 6-hourly\n"
+        f"#              ERA5 timesteps on the native 1° grid (180x360).\n\n"
+    )
+
+    with open(out_path, "w") as f:
+        f.write(header_comment)
+        yaml.safe_dump(output_payload, f, sort_keys=False)
+
+    print("\n" + "=" * 70)
+    print(f"SUMMARY OF COMPUTED STATISTICS (written to {out_path})")
+    print("=" * 70)
+    print("SURFACE VARIABLES:")
+    for k, v in results["surface"].items():
+        print(f"  {k:6s}: mean={v['mean']:12.4f}, std={v['std']:10.4f} (n={v['n']:,})")
+
+    print("\nATMOSPHERIC VARIABLES (SAMPLE LEVELS 50, 500, 1000 hPa):")
+    for var, levels in results["atmos"].items():
+        for p in (50, 500, 1000):
+            if p in levels:
+                v = levels[p]
+                m_str = f"{v['mean']:12.4f}" if abs(v['mean']) >= 0.01 else f"{v['mean']:12.6e}"
+                s_str = f"{v['std']:10.4f}" if abs(v['std']) >= 0.01 else f"{v['std']:10.6e}"
+                print(f"  {var}@{p:<4d}: mean={m_str}, std={s_str} (n={v['n']:,})")
+
+    return 0
 
 
 if __name__ == "__main__":

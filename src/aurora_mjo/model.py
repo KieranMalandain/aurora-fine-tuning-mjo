@@ -423,21 +423,38 @@ def load_model(config: dict, norm_stats: dict | None = None) -> AuroraMJO:
     extended_surf_vars = tuple(config["surface_variables"])
     model_class = AuroraPretrained if config["model_type"] == "full" else AuroraSmallPretrained
 
+    # Construct surf_stats dict for Aurora constructor to avoid global dict mutation
+    surf_stats: dict[str, tuple[float, float]] = {}
+    if norm_stats:
+        for var_name, stats in norm_stats.items():
+            if var_name in extended_surf_vars:
+                surf_stats[var_name] = (float(stats["mean"]), float(stats["std"]))
+                m, s = stats["mean"], stats["std"]
+                print(f"   - {var_name} (surf_stats): mean={m:.4f}, std={s:.4f}")
+
     backbone = model_class(
         surf_vars=extended_surf_vars,
         use_lora=config["use_lora"],
         lora_mode=config.get("lora_mode", "single"),
+        surf_stats=surf_stats or None,
     )
 
     print("Loading pre-trained weights (strict=False)")
     backbone.load_checkpoint(strict=False)
 
+    # Note on normalisation injection:
+    # Surface variables are normalised via Aurora's native `surf_stats` constructor hook above,
+    # preventing process-global mutation of `aurora.normalisation.locations` / `scales`.
+    # Aurora exposes no equivalent constructor hook for atmospheric variables (which are
+    # normalised via module-level `locations`/`scales`). If any atmospheric variables are
+    # passed in norm_stats (e.g. "z_50"), global mutation is unavoidable and applied here.
     if norm_stats:
-        print("Injecting normalisation statistics for new variables")
         for var_name, stats in norm_stats.items():
-            locations[var_name] = stats["mean"]
-            scales[var_name] = stats["std"]
-            print(f"   - {var_name}: mean={stats['mean']:.4f}, std={stats['std']:.4f}")
+            if var_name not in extended_surf_vars:
+                locations[var_name] = float(stats["mean"])
+                scales[var_name] = float(stats["std"])
+                m, s = stats["mean"], stats["std"]
+                print(f"   - {var_name} (global atmos fallback): mean={m:.4f}, std={s:.4f}")
 
     if config.get("gradient_checkpointing", False):
         print("Enabling gradient checkpointing")
