@@ -1,0 +1,742 @@
+{
+  "model_forward_pass": {
+    "atmos_outputs": {
+      "q": {
+        "dtype": "torch.float32",
+        "finite_fraction": 1.0,
+        "max": 0.018149949610233307,
+        "mean": 0.0015942016616876922,
+        "min": -0.00047223595902323723,
+        "non_finite_count": 0,
+        "shape": [
+          1,
+          1,
+          13,
+          180,
+          360
+        ],
+        "std": 0.0033022427033325462
+      },
+      "t": {
+        "dtype": "torch.float32",
+        "finite_fraction": 1.0,
+        "max": 301.9728088378906,
+        "mean": 242.8105043454184,
+        "min": 189.7506866455078,
+        "non_finite_count": 0,
+        "shape": [
+          1,
+          1,
+          13,
+          180,
+          360
+        ],
+        "std": 27.613094947467662
+      },
+      "u": {
+        "dtype": "torch.float32",
+        "finite_fraction": 1.0,
+        "max": 81.7930908203125,
+        "mean": 8.970418767868242,
+        "min": -26.051132202148438,
+        "non_finite_count": 0,
+        "shape": [
+          1,
+          1,
+          13,
+          180,
+          360
+        ],
+        "std": 13.829810159985408
+      },
+      "v": {
+        "dtype": "torch.float32",
+        "finite_fraction": 1.0,
+        "max": 30.387937545776367,
+        "mean": 0.5692354243998656,
+        "min": -24.738008499145508,
+        "non_finite_count": 0,
+        "shape": [
+          1,
+          1,
+          13,
+          180,
+          360
+        ],
+        "std": 5.4956466530840045
+      },
+      "z": {
+        "dtype": "torch.float32",
+        "finite_fraction": 1.0,
+        "max": 203578.703125,
+        "mean": 77700.21049386458,
+        "min": -2136.528564453125,
+        "non_finite_count": 0,
+        "shape": [
+          1,
+          1,
+          13,
+          180,
+          360
+        ],
+        "std": 59446.612364446126
+      }
+    },
+    "surface_outputs": {
+      "10u": {
+        "dtype": "torch.float32",
+        "finite_fraction": 1.0,
+        "max": 11.814637184143066,
+        "mean": -0.21743423172246873,
+        "min": -12.60241413116455,
+        "non_finite_count": 0,
+        "shape": [
+          1,
+          1,
+          180,
+          360
+        ],
+        "std": 2.904446805058569
+      },
+      "10v": {
+        "dtype": "torch.float32",
+        "finite_fraction": 1.0,
+        "max": 11.104150772094727,
+        "mean": -0.44864511019906694,
+        "min": -9.664999008178711,
+        "non_finite_count": 0,
+        "shape": [
+          1,
+          1,
+          180,
+          360
+        ],
+        "std": 2.4726069730290416
+      },
+      "2t": {
+        "dtype": "torch.float32",
+        "finite_fraction": 1.0,
+        "max": 305.7713928222656,
+        "mean": 275.73632422223506,
+        "min": 224.2894287109375,
+        "non_finite_count": 0,
+        "shape": [
+          1,
+          1,
+          180,
+          360
+        ],
+        "std": 18.654958578907582
+      },
+      "msl": {
+        "dtype": "torch.float32",
+        "finite_fraction": 1.0,
+        "max": 106233.5234375,
+        "mean": 97637.46138044946,
+        "min": 68573.546875,
+        "non_finite_count": 0,
+        "shape": [
+          1,
+          1,
+          180,
+          360
+        ],
+        "std": 6309.0835225003
+      },
+      "tcwv": {
+        "dtype": "torch.float32",
+        "finite_fraction": 1.0,
+        "max": 71.8951416015625,
+        "mean": 15.847891244005273,
+        "min": -39.33780288696289,
+        "non_finite_count": 0,
+        "shape": [
+          1,
+          1,
+          180,
+          360
+        ],
+        "std": 12.44644393920022
+      },
+      "ttr": {
+        "dtype": "torch.float32",
+        "finite_fraction": 1.0,
+        "max": -42.99681091308594,
+        "mean": -225.83431154404158,
+        "min": -431.90887451171875,
+        "non_finite_count": 0,
+        "shape": [
+          1,
+          1,
+          180,
+          360
+        ],
+        "std": 39.58079262668044
+      }
+    },
+    "total_parameters": 1256365744
+  },
+  "named_traps": {
+    "static_lsm_range": "lsm min=0.0000, max=1.0000 \u2208 [0, 1]: True.",
+    "static_slt_integers": "slt unique values = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0], discrete integers 0\u20137 only: True.",
+    "trap_1_ttr_negative": "ttr mean is -225.38 W m\u207b\u00b2 (< 0: True). Negative downward-positive net flux confirmed.",
+    "trap_2_surface_z_units": "Surface z mean is 3709.25 m\u00b2 s\u207b\u00b2 (\u00f7 9.80665 = 378.24 m \u2248 378 m: True). Geopotential units confirmed.",
+    "trap_3_q_orders_of_magnitude": "q @ 1000 hPa mean is 0.006645 kg kg\u207b\u00b9, q @ 50 hPa mean is 2.84728483e-06 kg kg\u207b\u00b9 (ratio: 2333.9x > 1000x: True). 4 orders of magnitude confirmed."
+  },
+  "normalization_worst_sigmas": {
+    "10u": {
+      "fraction_within_10_sigma_pct": 100.0,
+      "fraction_within_5_sigma_pct": 100.0,
+      "location": {
+        "lat": 58.5,
+        "lon": 314.5,
+        "time_idx": 0
+      },
+      "mean_stat": -0.0536,
+      "std_stat": 5.4905,
+      "worst_abs_sigma": 3.879748315049503,
+      "worst_sigma": -3.879748315049503
+    },
+    "10v": {
+      "fraction_within_10_sigma_pct": 100.0,
+      "fraction_within_5_sigma_pct": 100.0,
+      "location": {
+        "lat": -34.5,
+        "lon": 311.5,
+        "time_idx": 0
+      },
+      "mean_stat": 0.19,
+      "std_stat": 4.7146,
+      "worst_abs_sigma": 4.707845963696673,
+      "worst_sigma": 4.707845963696673
+    },
+    "2t": {
+      "fraction_within_10_sigma_pct": 100.0,
+      "fraction_within_5_sigma_pct": 100.0,
+      "location": {
+        "lat": 67.5,
+        "lon": 106.5,
+        "time_idx": 0
+      },
+      "mean_stat": 278.4647,
+      "std_stat": 21.2352,
+      "worst_abs_sigma": 2.8408598218645364,
+      "worst_sigma": -2.8408598218645364
+    },
+    "msl": {
+      "fraction_within_10_sigma_pct": 100.0,
+      "fraction_within_5_sigma_pct": 100.0,
+      "location": {
+        "lat": 34.5,
+        "lon": 79.5,
+        "time_idx": 0
+      },
+      "mean_stat": 96668.7494,
+      "std_stat": 9504.4086,
+      "worst_abs_sigma": 4.785475719920122,
+      "worst_sigma": -4.785475719920122
+    },
+    "q": {
+      "fraction_within_10_sigma_pct": 100.0,
+      "fraction_within_5_sigma_pct": 99.99958452041786,
+      "location": {
+        "lat": -8.5,
+        "level_hPa": 400,
+        "lon": 174.5,
+        "time_idx": 1
+      },
+      "worst_abs_sigma": 5.187573874046976,
+      "worst_sigma": 5.187573874046976
+    },
+    "t": {
+      "fraction_within_10_sigma_pct": 100.0,
+      "fraction_within_5_sigma_pct": 100.0,
+      "location": {
+        "lat": 65.5,
+        "level_hPa": 1000,
+        "lon": 119.5,
+        "time_idx": 0
+      },
+      "worst_abs_sigma": 3.582898312731826,
+      "worst_sigma": -3.582898312731826
+    },
+    "tcwv": {
+      "fraction_within_10_sigma_pct": 100.0,
+      "fraction_within_5_sigma_pct": 100.0,
+      "location": {
+        "lat": -8.5,
+        "lon": 173.5,
+        "time_idx": 1
+      },
+      "mean_stat": 18.279,
+      "std_stat": 16.3142,
+      "worst_abs_sigma": 2.8472706183433663,
+      "worst_sigma": 2.8472706183433663
+    },
+    "ttr": {
+      "fraction_within_10_sigma_pct": 100.0,
+      "fraction_within_5_sigma_pct": 100.0,
+      "location": {
+        "lat": -14.5,
+        "lon": 129.5,
+        "time_idx": 0
+      },
+      "mean_stat": -226.0305,
+      "std_stat": 49.21,
+      "worst_abs_sigma": 2.654731887851491,
+      "worst_sigma": 2.654731887851491
+    },
+    "u": {
+      "fraction_within_10_sigma_pct": 100.0,
+      "fraction_within_5_sigma_pct": 99.99982193732194,
+      "location": {
+        "lat": 59.5,
+        "level_hPa": 850,
+        "lon": 315.5,
+        "time_idx": 0
+      },
+      "worst_abs_sigma": 5.250462284669321,
+      "worst_sigma": -5.250462284669321
+    },
+    "v": {
+      "fraction_within_10_sigma_pct": 100.0,
+      "fraction_within_5_sigma_pct": 99.98421177587844,
+      "location": {
+        "lat": 37.5,
+        "level_hPa": 850,
+        "lon": 180.5,
+        "time_idx": 0
+      },
+      "worst_abs_sigma": 6.50913592432684,
+      "worst_sigma": 6.50913592432684
+    },
+    "z": {
+      "fraction_within_10_sigma_pct": 100.0,
+      "fraction_within_5_sigma_pct": 100.0,
+      "location": {
+        "lat": -58.5,
+        "level_hPa": 1000,
+        "lon": 106.5,
+        "time_idx": 0
+      },
+      "worst_abs_sigma": 4.148897207077781,
+      "worst_sigma": -4.148897207077781
+    }
+  },
+  "provenance": {
+    "grid": "180x360 native 1 degree",
+    "norm_stats_file": "configs/norm_stats_1980_2015.yaml",
+    "years_sampled": [
+      1980,
+      1998,
+      2015
+    ]
+  },
+  "sample_years_summary": {
+    "1980": {
+      "static_vars": {
+        "lsm": {
+          "dtype": "torch.float32",
+          "finite_fraction": 1.0,
+          "max": 1.0,
+          "mean": 0.3356685748056237,
+          "min": 0.0,
+          "non_finite_count": 0,
+          "shape": [
+            180,
+            360
+          ],
+          "std": 0.4536386323535734
+        },
+        "slt": {
+          "dtype": "torch.float32",
+          "finite_fraction": 1.0,
+          "max": 7.0,
+          "mean": 0.6714506172839506,
+          "min": 0.0,
+          "non_finite_count": 0,
+          "shape": [
+            180,
+            360
+          ],
+          "std": 1.1690794075431328
+        },
+        "z": {
+          "dtype": "torch.float32",
+          "finite_fraction": 1.0,
+          "max": 52784.2890625,
+          "mean": 3709.2467282870416,
+          "min": -343.4910888671875,
+          "non_finite_count": 0,
+          "shape": [
+            180,
+            360
+          ],
+          "std": 8272.724441130806
+        }
+      },
+      "surface_vars": {
+        "10u": {
+          "dtype": "torch.float32",
+          "finite_fraction": 1.0,
+          "max": 20.708473205566406,
+          "mean": -0.15574249481543764,
+          "min": -21.355358123779297,
+          "non_finite_count": 0,
+          "shape": [
+            1,
+            2,
+            180,
+            360
+          ],
+          "std": 5.103925321435378
+        },
+        "10v": {
+          "dtype": "torch.float32",
+          "finite_fraction": 1.0,
+          "max": 22.385610580444336,
+          "mean": -0.198237159291303,
+          "min": -19.573814392089844,
+          "non_finite_count": 0,
+          "shape": [
+            1,
+            2,
+            180,
+            360
+          ],
+          "std": 4.295643614241064
+        },
+        "2t": {
+          "dtype": "torch.float32",
+          "finite_fraction": 1.0,
+          "max": 312.9109191894531,
+          "mean": 276.3275894548864,
+          "min": 218.1384735107422,
+          "non_finite_count": 0,
+          "shape": [
+            1,
+            2,
+            180,
+            360
+          ],
+          "std": 20.229140880659177
+        },
+        "msl": {
+          "dtype": "torch.float32",
+          "finite_fraction": 1.0,
+          "max": 104931.8046875,
+          "mean": 96826.79384825907,
+          "min": 51185.6328125,
+          "non_finite_count": 0,
+          "shape": [
+            1,
+            2,
+            180,
+            360
+          ],
+          "std": 9521.058030062515
+        },
+        "tcwv": {
+          "dtype": "torch.float32",
+          "finite_fraction": 1.0,
+          "max": 64.72994232177734,
+          "mean": 16.93798021097633,
+          "min": 0.3297196924686432,
+          "non_finite_count": 0,
+          "shape": [
+            1,
+            2,
+            180,
+            360
+          ],
+          "std": 16.38095067156683
+        },
+        "ttr": {
+          "dtype": "torch.float32",
+          "finite_fraction": 1.0,
+          "max": -95.39114379882812,
+          "mean": -225.38091218171297,
+          "min": -346.7436218261719,
+          "non_finite_count": 0,
+          "shape": [
+            1,
+            2,
+            180,
+            360
+          ],
+          "std": 46.32350883517797
+        }
+      }
+    },
+    "1998": {
+      "static_vars": {
+        "lsm": {
+          "dtype": "torch.float32",
+          "finite_fraction": 1.0,
+          "max": 1.0,
+          "mean": 0.3356685748056237,
+          "min": 0.0,
+          "non_finite_count": 0,
+          "shape": [
+            180,
+            360
+          ],
+          "std": 0.4536386323535734
+        },
+        "slt": {
+          "dtype": "torch.float32",
+          "finite_fraction": 1.0,
+          "max": 7.0,
+          "mean": 0.6714506172839506,
+          "min": 0.0,
+          "non_finite_count": 0,
+          "shape": [
+            180,
+            360
+          ],
+          "std": 1.1690794075431328
+        },
+        "z": {
+          "dtype": "torch.float32",
+          "finite_fraction": 1.0,
+          "max": 52784.2890625,
+          "mean": 3709.2467282870416,
+          "min": -343.4910888671875,
+          "non_finite_count": 0,
+          "shape": [
+            180,
+            360
+          ],
+          "std": 8272.724441130806
+        }
+      },
+      "surface_vars": {
+        "10u": {
+          "dtype": "torch.float32",
+          "finite_fraction": 1.0,
+          "max": 24.995100021362305,
+          "mean": -0.2636715054566718,
+          "min": -24.359193801879883,
+          "non_finite_count": 0,
+          "shape": [
+            1,
+            2,
+            180,
+            360
+          ],
+          "std": 5.68768807106014
+        },
+        "10v": {
+          "dtype": "torch.float32",
+          "finite_fraction": 1.0,
+          "max": 23.023223876953125,
+          "mean": -0.16987234548619548,
+          "min": -20.81395721435547,
+          "non_finite_count": 0,
+          "shape": [
+            1,
+            2,
+            180,
+            360
+          ],
+          "std": 4.805625841938524
+        },
+        "2t": {
+          "dtype": "torch.float32",
+          "finite_fraction": 1.0,
+          "max": 318.2022399902344,
+          "mean": 276.4293474512924,
+          "min": 219.6192626953125,
+          "non_finite_count": 0,
+          "shape": [
+            1,
+            2,
+            180,
+            360
+          ],
+          "std": 20.803147102734588
+        },
+        "msl": {
+          "dtype": "torch.float32",
+          "finite_fraction": 1.0,
+          "max": 104281.421875,
+          "mean": 96757.11043655961,
+          "min": 51742.40625,
+          "non_finite_count": 0,
+          "shape": [
+            1,
+            2,
+            180,
+            360
+          ],
+          "std": 9339.882433037888
+        },
+        "tcwv": {
+          "dtype": "torch.float32",
+          "finite_fraction": 1.0,
+          "max": 73.60981750488281,
+          "mean": 17.143394133740415,
+          "min": 0.2764560878276825,
+          "non_finite_count": 0,
+          "shape": [
+            1,
+            2,
+            180,
+            360
+          ],
+          "std": 16.770063618187198
+        },
+        "ttr": {
+          "dtype": "torch.float32",
+          "finite_fraction": 1.0,
+          "max": -78.0420150756836,
+          "mean": -224.7771362581371,
+          "min": -370.1391906738281,
+          "non_finite_count": 0,
+          "shape": [
+            1,
+            2,
+            180,
+            360
+          ],
+          "std": 46.03191858107001
+        }
+      }
+    },
+    "2015": {
+      "static_vars": {
+        "lsm": {
+          "dtype": "torch.float32",
+          "finite_fraction": 1.0,
+          "max": 1.0,
+          "mean": 0.3356685748056237,
+          "min": 0.0,
+          "non_finite_count": 0,
+          "shape": [
+            180,
+            360
+          ],
+          "std": 0.4536386323535734
+        },
+        "slt": {
+          "dtype": "torch.float32",
+          "finite_fraction": 1.0,
+          "max": 7.0,
+          "mean": 0.6714506172839506,
+          "min": 0.0,
+          "non_finite_count": 0,
+          "shape": [
+            180,
+            360
+          ],
+          "std": 1.1690794075431328
+        },
+        "z": {
+          "dtype": "torch.float32",
+          "finite_fraction": 1.0,
+          "max": 52784.2890625,
+          "mean": 3709.2467282870416,
+          "min": -343.4910888671875,
+          "non_finite_count": 0,
+          "shape": [
+            180,
+            360
+          ],
+          "std": 8272.724441130806
+        }
+      },
+      "surface_vars": {
+        "10u": {
+          "dtype": "torch.float32",
+          "finite_fraction": 1.0,
+          "max": 23.651317596435547,
+          "mean": -0.15555408531185566,
+          "min": -21.440196990966797,
+          "non_finite_count": 0,
+          "shape": [
+            1,
+            2,
+            180,
+            360
+          ],
+          "std": 5.414520948072549
+        },
+        "10v": {
+          "dtype": "torch.float32",
+          "finite_fraction": 1.0,
+          "max": 18.468767166137695,
+          "mean": -0.17429511996641592,
+          "min": -20.116382598876953,
+          "non_finite_count": 0,
+          "shape": [
+            1,
+            2,
+            180,
+            360
+          ],
+          "std": 4.8947711119938795
+        },
+        "2t": {
+          "dtype": "torch.float32",
+          "finite_fraction": 1.0,
+          "max": 316.6782531738281,
+          "mean": 277.067903393404,
+          "min": 221.4735107421875,
+          "non_finite_count": 0,
+          "shape": [
+            1,
+            2,
+            180,
+            360
+          ],
+          "std": 19.708327791480837
+        },
+        "msl": {
+          "dtype": "torch.float32",
+          "finite_fraction": 1.0,
+          "max": 104341.3515625,
+          "mean": 96714.6516014118,
+          "min": 52089.8203125,
+          "non_finite_count": 0,
+          "shape": [
+            1,
+            2,
+            180,
+            360
+          ],
+          "std": 9343.690462099457
+        },
+        "tcwv": {
+          "dtype": "torch.float32",
+          "finite_fraction": 1.0,
+          "max": 69.54965209960938,
+          "mean": 17.260049148574932,
+          "min": 0.42890241742134094,
+          "non_finite_count": 0,
+          "shape": [
+            1,
+            2,
+            180,
+            360
+          ],
+          "std": 16.656598290130788
+        },
+        "ttr": {
+          "dtype": "torch.float32",
+          "finite_fraction": 1.0,
+          "max": -75.42761993408203,
+          "mean": -225.47096428376656,
+          "min": -377.0865478515625,
+          "non_finite_count": 0,
+          "shape": [
+            1,
+            2,
+            180,
+            360
+          ],
+          "std": 44.59977988328737
+        }
+      }
+    }
+  }
+}
