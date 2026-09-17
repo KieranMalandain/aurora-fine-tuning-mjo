@@ -2,7 +2,7 @@
 
 Verifies:
   1. Offline construction of LANLMJODataset for year 1980 yields exactly 1,462 samples.
-  2. Static variables ("z", "lsm", "slt") are 2D tensors of shape (720, 1440) and finite.
+  2. Static variables ("z", "lsm", "slt") are 2D tensors of shape (18, 36) and finite.
   3. Sample 0 returns a (Batch, dict, dict) triple.
   4. metadata.atmos_levels is the exact 13-tuple (50, 100, ..., 1000) hPa.
   5. Surface input variables carry a 2-timestep axis while targets do not.
@@ -28,7 +28,7 @@ EXPECTED_STATIC_VARS = {"z", "lsm", "slt"}
 CFS_ROOT = Path(
     "/global/cfs/cdirs/m4946/xiaoming/zm4946.MachLearn/PrcsPrep/prcs.ERA5/prcs.ERA5.Remap/Results"
 )
-DEFAULT_SLT_PATH = Path("/pscratch/sd/k/kam352/Aurora/slt/slt_data.nc")
+DEFAULT_SLT_PATH = Path("data/static/slt_1deg.nc")
 
 
 def test_dataset_offline_sample_count_and_length(synthetic_dataset: LANLMJODataset) -> None:
@@ -39,19 +39,19 @@ def test_dataset_offline_sample_count_and_length(synthetic_dataset: LANLMJODatas
 
 
 def test_dataset_static_variables(synthetic_dataset: LANLMJODataset) -> None:
-    """Verify presence, 2D rank, shape (720, 1440), and finiteness of static variables."""
+    """Verify presence, 2D rank, shape (18, 36), and finiteness of static variables."""
     static = synthetic_dataset.static_vars
     assert set(static.keys()) == EXPECTED_STATIC_VARS
 
     for name, tensor in static.items():
         assert isinstance(tensor, torch.Tensor), f"Static var '{name}' is not a Tensor"
         assert tensor.ndim == 2, f"Static var '{name}' ndim is {tensor.ndim}, expected 2"
-        # 03_DOMAIN_PRIORS.md §3: Invariant z and lsm are upsampled to (720, 1440),
-        # slt is truncated to (720, 1440). All static vars must have Aurora grid shape.
+        # 03_DOMAIN_PRIORS.md §2, §3: All static vars load at native resolution (18, 36)
+        # without interpolation or truncation.
         assert tensor.shape == (
-            720,
-            1440,
-        ), f"Static var '{name}' shape is {tensor.shape}, expected (720, 1440)"
+            18,
+            36,
+        ), f"Static var '{name}' shape is {tensor.shape}, expected (18, 36)"
         assert torch.isfinite(tensor).all(), f"Static var '{name}' contains non-finite values"
 
     # Check plausible numerical ranges
@@ -89,6 +89,11 @@ def test_dataset_sample_zero_triple_and_metadata(synthetic_dataset: LANLMJODatas
 
     assert torch.isfinite(in_batch.metadata.lat).all()
     assert torch.isfinite(in_batch.metadata.lon).all()
+    assert len(in_batch.metadata.lat) == 18
+    assert len(in_batch.metadata.lon) == 36
+    # 03_DOMAIN_PRIORS.md §2.1: Latitudes must be strictly decreasing for Aurora
+    assert (in_batch.metadata.lat[1:] - in_batch.metadata.lat[:-1] < 0).all()
+    assert (in_batch.metadata.lon[1:] - in_batch.metadata.lon[:-1] > 0).all()
 
 
 def test_dataset_input_and_target_timestep_axes(synthetic_dataset: LANLMJODataset) -> None:
@@ -146,6 +151,12 @@ def test_real_dataset_loader_priors() -> None:
     # 03_DOMAIN_PRIORS.md §1: MEASURED in docs/verify_output.txt
     assert len(ds) == 1462
 
+    # Verify native static shapes
+    assert ds.static_vars["z"].shape == (180, 360)
+    assert ds.static_vars["lsm"].shape == (180, 360)
+    if slt_path is not None:
+        assert ds.static_vars["slt"].shape == (180, 360)
+
     # 03_DOMAIN_PRIORS.md §3: MEASURED static means
     z_mean = ds.static_vars["z"].mean().item()
     lsm_mean = ds.static_vars["lsm"].mean().item()
@@ -154,4 +165,15 @@ def test_real_dataset_loader_priors() -> None:
 
     if slt_path is not None:
         slt_mean = ds.static_vars["slt"].mean().item()
-        assert slt_mean == pytest.approx(0.6708, rel=1e-2)
+        assert slt_mean == pytest.approx(0.6715, rel=1e-2)
+
+    # Coordinate checks on real sample 0
+    sample_0, _, _ = ds[0]
+    assert len(sample_0.metadata.lat) == 180
+    assert len(sample_0.metadata.lon) == 360
+    assert (sample_0.metadata.lat[1:] - sample_0.metadata.lat[:-1] < 0).all()
+    assert (sample_0.metadata.lon[1:] - sample_0.metadata.lon[:-1] > 0).all()
+    assert sample_0.metadata.lat[0].item() == pytest.approx(89.5)
+    assert sample_0.metadata.lat[-1].item() == pytest.approx(-89.5)
+    assert sample_0.metadata.lon[0].item() == pytest.approx(0.5)
+    assert sample_0.metadata.lon[-1].item() == pytest.approx(359.5)

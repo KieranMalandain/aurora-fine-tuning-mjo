@@ -113,10 +113,10 @@ def test_distinct_save_dir_per_mode(config_path: Path) -> None:
 
 
 def test_apply_overrides_locked_against_b1_fingerprint(
-    config_path: Path, baseline_fingerprint: dict[str, Any]
+    baseline_fingerprint: dict[str, Any],
 ) -> None:
     """Lock --override dot-notation and type coercion against B1 baseline fingerprint."""
-    raw_cfg = load_config(config_path, mode="baseline")
+    raw_cfg = baseline_fingerprint["config_baseline"]
     overridden = apply_overrides(raw_cfg, ["training.optimizer.lr=1e-5"])
 
     expected_fp = baseline_fingerprint["config_baseline_override"]

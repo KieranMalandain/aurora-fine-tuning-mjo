@@ -61,7 +61,7 @@ def synthetic_root_gapped() -> Path:
 
 @pytest.fixture(scope="session")
 def synthetic_slt() -> Path:
-    """Path to the 720x1440 synthetic slt_data_synthetic.nc file."""
+    """Path to the native 18x36 synthetic slt_data_synthetic.nc file."""
     path = Path(__file__).parent / "fixtures" / "slt_data_synthetic.nc"
     if not path.exists():
         pytest.fail(
