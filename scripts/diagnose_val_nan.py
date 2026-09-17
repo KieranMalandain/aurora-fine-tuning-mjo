@@ -312,10 +312,10 @@ def stage4_forward(args, problems: list):
         root_dir=args.root,
         slt_path=args.slt,
     )
-    from aurora_mjo.trainer import _align_shapes, _upsample_batch_gpu
+    from aurora_mjo.trainer import _align_shapes
 
     in_b, s_t, a_t = ds[0]
-    in_b, tgts = _upsample_batch_gpu(in_b, s_t, a_t, device)
+    tgts = [{**s, **a} for s, a in zip(s_t, a_t, strict=True)]
     for g in (in_b.surf_vars, in_b.atmos_vars, in_b.static_vars):
         for k in g:
             g[k] = g[k].to(device).float().contiguous()

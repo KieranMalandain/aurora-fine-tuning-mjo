@@ -10,7 +10,7 @@ class TropicalWeightedL1Loss(nn.Module):
     region to force the model to focus on MJO-relevant latitudes.
 
     Accepts tensors of any shape as long as one dimension matches the
-    latitude axis length (720 for Aurora 0.25deg grid).  Weights are
+    latitude axis length (180 for Aurora 1deg grid).  Weights are
     stored as 1-D and reshaped dynamically so the loss works with
     per-variable inputs of different ranks:
       - Surface:  (B, H, W)      or (B, 1, H, W)
