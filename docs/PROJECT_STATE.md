@@ -1,15 +1,15 @@
 # Living Project State
 
 **Last Updated:** 2026-09-17  
-**Active Phase:** Campaign `science-baseline` underway (Tasks G1, G2, G3 implemented); preparing for Task G4 (Physical Sanity Fingerprint).  
+**Active Phase:** Campaign `science-baseline` Phase G complete (Tasks G1, G2, G3, G4 implemented); ready for Phase H (Objective & Loss) and Phase J (Evaluation & Ruler).  
 
 ---
 
 ## 1. Next Action
 
-> **Implement Task G4 (Physical Sanity Fingerprint): author 1° physical range and physical sanity regression test suite (`tests/fixtures/science-baseline/`); replace historical behavioural equivalence gates.**
+> **Implement Tasks H1 (Normalised, Area-Weighted Loss) and J1 (Wheel-Hendon RMM Reconstruction): launch parallel Phase H and Phase J tracks.**
 
-**Justification:** Tasks G1 (1° native resolution), G2 (1.3B model scale), and G3 (true 1980–2015 normalisation statistics) have completed the model and data substrate overhaul. G4 establishes the physical sanity gate at 1°.
+**Justification:** Phase G has established a fully verified physical substrate: native 1° ingestion (G1), 1.3B model mapping and scaling (G2), true 1980–2015 Welford normalisation statistics (G3), and complete physical range verification / named-trap validation (G4). The pipeline is physically grounded and ready for loss overhaul (H1–H4) and RMM evaluation re-anchoring (J1–J7).
 
 *Campaign Synthesis & Next Steps:* See [`docs/campaigns/science-baseline/README.md`](campaigns/science-baseline/README.md) for full campaign plan and execution roadmap.
 
@@ -19,6 +19,7 @@
 
 | Component / Subsystem | Status | Evidence / Reference | Notes |
 | :--- | :--- | :--- | :--- |
+| **Physical Sanity Gate (1° Fingerprint)** | **GREEN** | Task G4 (`scripts/verify_dataset_loader.py`, `tests/fixtures/science-baseline/`, `tests/test_physical_ranges.py`) | All 11 dynamic variables + 3 statics verified across 1980, 1998, 2015 against literature ranges; three named traps verified (ttr negative, surface z in m² s⁻², q spanning >3–4 orders of magnitude); G3 normalization sigmas within ±10 σ (bulk in ±5 σ); full 1.3B model forward pass finite on GPU; 99 offline tests passing. |
 | **Normalisation Statistics (1980–2015)** | **GREEN** | Task G3 (`src/aurora_mjo/stats.py`, `configs/norm_stats_1980_2015.yaml`) | True statistics computed across all 4,752 files (3.4B samples/field) at 1° native resolution via Welford parallel reduction; surface variables use native Aurora `surf_stats` constructor hook; placeholder values retired; `test_placeholder_norm_stats_guard` passing (0 xfail). |
 | **Model Scale (1.3B Backbone)** | **GREEN** | Task G2 (`model.py`, `config.py`, `cli_support.py`) | `model_type: full` selects `AuroraPretrained` (1.26B total params); `small` (`AuroraSmallPretrained`) confined to smoke/CI; `huge` retired; production enforces `require_full_model: true`; 1° peak memory 14.69 GiB (81.6% free VRAM), step time 221 ms; Lesson 6 constraint dissolved. |
 | **Native Resolution Ingestion** | **GREEN** | Task G1 (`src/aurora_mjo/dataset.py`, `trainer.py`) | Both upsamplers deleted; 1° grid coordinates dynamically loaded from CFS archive; slt regridded to 1° (`data/static/slt_1deg.nc`); forward pass finite. |

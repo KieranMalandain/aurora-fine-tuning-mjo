@@ -1,0 +1,38 @@
+{
+  "baseline": {
+    "checkpoint": "aurora-0.25-pretrained.ckpt",
+    "device": "cuda",
+    "frozen_params": 1256283776,
+    "lora_constructed": false,
+    "mjo_head_constructed": false,
+    "mjo_head_params": 0,
+    "mjo_head_trainable": 0,
+    "model_type": "full",
+    "total_params": 1256365744,
+    "trainable_params": 81968
+  },
+  "lora": {
+    "checkpoint": "aurora-0.25-pretrained.ckpt",
+    "device": "cuda",
+    "frozen_params": 1256283776,
+    "lora_constructed": true,
+    "mjo_head_constructed": false,
+    "mjo_head_params": 0,
+    "mjo_head_trainable": 0,
+    "model_type": "full",
+    "total_params": 1259216560,
+    "trainable_params": 2932784
+  },
+  "physics_informed": {
+    "checkpoint": "aurora-0.25-pretrained.ckpt",
+    "device": "cuda",
+    "frozen_params": 1256283776,
+    "lora_constructed": false,
+    "mjo_head_constructed": false,
+    "mjo_head_params": 0,
+    "mjo_head_trainable": 0,
+    "model_type": "full",
+    "total_params": 1256365744,
+    "trainable_params": 81968
+  }
+}

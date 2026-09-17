@@ -96,32 +96,45 @@ All rows **LITERATURE** unless marked. Ranges are global, all seasons, and
 deliberately generous — a violation means a unit error or a mis-mapped variable,
 not an unusual day.
 
-| Variable | Units | Global mean, plausible | Hard bounds |
-| --- | --- | --- | --- |
-| `2t` | K | 285 – 290 | 180 – 340 |
-| `10u`, `10v` | m s⁻¹ | −1 – 1 | −110 – 110 |
-| `msl` (= `ps`) | Pa | 96,000 – 99,000 | 47,000 – 108,000 |
-| `ttr` (= `mtnlwrf`) | W m⁻² | −250 – −215 | −400 – −50 |
-| `tcwv` | kg m⁻² | 24 – 26 | 0 – 100 |
-| `q` @ 1000 hPa | kg kg⁻¹ | 0.008 – 0.012 | 0 – 0.04 |
-| `q` @ 50 hPa | kg kg⁻¹ | ~2.5 × 10⁻⁶ | 0 – 10⁻⁵ |
-| `t` @ 500 hPa | K | 250 – 256 | 200 – 290 |
-| `z` @ 500 hPa | m² s⁻² | 54,000 – 55,500 | 45,000 – 60,000 |
-| `u` @ 200 hPa | m s⁻¹ | 8 – 15 | −80 – 120 |
+| Variable | Units | Global mean, plausible | Hard bounds | Provenance |
+| --- | --- | --- | --- | --- |
+| `2t` | K | 275 – 285 (unweighted) / 285 – 290 (area-weighted) | 180 – 340 | **MEASURED** (G3 mean 278.46 K; 1980 s0: 276.33 K) |
+| `10u`, `10v` | m s⁻¹ | −1 – 1 | −110 – 110 | **MEASURED** (1980 s0: 10u -0.16 m/s, 10v -0.20 m/s) |
+| `msl` (= `ps`) | Pa | 96,000 – 99,000 | 47,000 – 108,000 | **MEASURED** (G3 mean 96,668.75 Pa; 1980 s0: 96,826.79 Pa) |
+| `ttr` (= `mtnlwrf`) | W m⁻² | −250 – −215 | −400 – −50 | **MEASURED** (G3 mean -226.03 W/m²; 1980 s0: -225.38 W/m²) |
+| `tcwv` | kg m⁻² | 16 – 26 | 0 – 100 | **MEASURED** (G3 mean 18.28 kg/m²; 1980 s0: 16.94 kg/m²) |
+| `q` @ 1000 hPa | kg kg⁻¹ | 0.006 – 0.014 | 0 – 0.04 | **MEASURED** (1980 s0: 0.00665 kg/kg, max 0.0202 kg/kg) |
+| `q` @ 50 hPa | kg kg⁻¹ | ~2.5 – 3.0 × 10⁻⁶ | 0 – 10⁻⁵ | **MEASURED** (1980 s0: 2.85 × 10⁻⁶ kg/kg) |
+| `t` @ 500 hPa | K | 250 – 256 | 200 – 290 | **MEASURED** (1980 s0: 251.87 K) |
+| `z` @ 500 hPa | m² s⁻² | 54,000 – 55,500 | 45,000 – 60,000 | **MEASURED** (1980 s0: 54,710.82 m² s⁻²) |
+| `u` @ 200 hPa | m s⁻¹ | 8 – 16 | −80 – 120 | **MEASURED** (1980 s0: 13.91 m/s) |
 
-Three that catch specific, silent errors:
+Three that catch specific, silent errors — all verified in **G4**:
 
 - **`ttr` must be negative.** It is net top long-wave flux, downward-positive.
   A positive mean means the sign convention flipped and every RMM phase will be
-  rotated by 180°. `configs/unified.yaml` records mean −226.05, consistent
-  (**MEASURED**).
+  rotated by 180°. **MEASURED in G4:** 1980 s0 mean = −225.38 W m⁻², 1998 s0 mean = −224.78 W m⁻², 2015 s0 mean = −225.47 W m⁻². Strictly negative; trap avoided.
 - **`z` is geopotential, not geopotential height.** Surface `z` mean 3709.2466
-  m² s⁻² ÷ 9.80665 ≈ 378 m mean elevation (**MEASURED**, `verify_output_slt.txt`).
-  If you ever see surface `z` mean ≈ 378, the units flipped and the error is
-  silent.
+  m² s⁻² ÷ 9.80665 ≈ 378 m mean elevation. **MEASURED in G4:** Surface `z` mean = 3,709.25 m² s⁻² ÷ 9.80665 = 378.24 m. Geopotential units confirmed; trap avoided.
 - **`q` spans four orders of magnitude across the 13 levels.** A `q` field whose
-  levels are all within one order of each other has been mis-indexed — see
-  `_probe_pressure_level_indices` and the 29→13 level subset.
+  levels are all within one order of each other has been mis-indexed. **MEASURED in G4:**
+  `q` @ 1000 hPa mean = 6.65 × 10⁻³ kg kg⁻¹ vs `q` @ 50 hPa mean = 2.85 × 10⁻⁶ kg kg⁻¹ (ratio 2,334×, > 3.3 orders of magnitude; training population spans 16,418×, > 4 orders). Trap avoided.
+
+### 3.1 Measured multi-year sample 0 statistics (G4)
+
+Measured on native 1° regular grid (180×360) across three training years:
+
+| Variable | 1980 Sample 0 [min, max] (mean) | 1998 Sample 0 [min, max] (mean) | 2015 Sample 0 [min, max] (mean) |
+| --- | --- | --- | --- |
+| `2t` (K) | [218.14, 312.91] (276.33) | [219.62, 318.20] (276.43) | [221.47, 316.68] (277.07) |
+| `10u` (m s⁻¹) | [-21.36, 20.71] (-0.16) | [-24.36, 25.00] (-0.26) | [-21.44, 23.65] (-0.16) |
+| `10v` (m s⁻¹) | [-19.57, 22.39] (-0.20) | [-20.81, 23.02] (-0.17) | [-20.12, 18.47] (-0.17) |
+| `msl` (Pa) | [51,185.6, 104,931.8] (96,826.8) | [51,742.4, 104,281.4] (96,757.1) | [52,089.8, 104,341.4] (96,714.7) |
+| `ttr` (W m⁻²) | [-356.67, -95.39] (-225.38) | [-370.14, -78.04] (-224.78) | [-377.09, -75.43] (-225.47) |
+| `tcwv` (kg m⁻²) | [0.33, 64.73] (16.94) | [0.28, 73.61] (17.14) | [0.43, 69.55] (17.26) |
+| Static `lsm` | [0.00, 1.00] (0.3357) | [0.00, 1.00] (0.3357) | [0.00, 1.00] (0.3357) |
+| Static `slt` | {0, 1, 2, 3, 4, 5, 6, 7} (0.671) | {0, 1, 2, 3, 4, 5, 6, 7} (0.671) | {0, 1, 2, 3, 4, 5, 6, 7} (0.671) |
+| Static `z` (m² s⁻²) | [-343.49, 52,784.3] (3,709.25) | [-343.49, 52,784.3] (3,709.25) | [-343.49, 52,784.3] (3,709.25) |
 
 ---
 
