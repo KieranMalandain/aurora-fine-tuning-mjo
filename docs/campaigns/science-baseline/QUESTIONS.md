@@ -156,7 +156,15 @@ agree, pastes the first and last five values of each into its result file, and
 adds the values to `03_DOMAIN_PRIORS.md` §2.1. **No `linspace` for grid
 construction, ever.**
 
-**ANSWER (human, YYYY-MM-DD):**
+**ANSWER (G1, 2026-09-17):**
+Measured from CFS archive reference files across all eleven variables and invariants:
+- All 11 variables match to float32 exactness.
+- Grid is cell-centred regular 1.0°: 180 latitudes and 360 longitudes.
+- Archive file coordinates: `lat` runs -89.5 to 89.5 (ascending); `lon` runs 0.5 to 359.5 (ascending).
+- Raw archive latitudes: First 5 are `[-89.5, -88.5, -87.5, -86.5, -85.5]`, last 5 are `[85.5, 86.5, 87.5, 88.5, 89.5]`.
+- Raw archive longitudes: First 5 are `[0.5, 1.5, 2.5, 3.5, 4.5]`, last 5 are `[355.5, 356.5, 357.5, 358.5, 359.5]`.
+- Aurora convention: `Metadata` strictly enforces decreasing latitude (`lat[1:] - lat[:-1] < 0`), and Aurora expects North at row 0. Therefore, `dataset.py` inverts the latitude coordinate to descending (`89.5 ... -89.5`) and flips data arrays along the latitude axis (`axis=-2`) to maintain physical spatial consistency.
+- Descending latitudes: First 5 are `[89.5, 88.5, 87.5, 86.5, 85.5]`, last 5 are `[-85.5, -86.5, -87.5, -88.5, -89.5]`.
 
 ---
 
@@ -325,5 +333,20 @@ precisely which filter was applied and in which direction, and adds the same
 leakage assertion it applies to the 120-day window. If a causal OMI cannot be
 implemented cleanly, report RMM only and state the confound in the paper rather
 than reporting a leaked second index.
+
+**ANSWER (human, YYYY-MM-DD):**
+
+---
+
+## Q-23 — Decoupling historical B1 baseline fixture round-trip tests from evolving configs/unified.yaml
+
+**Raised by:** G1, 2026-09-17
+**Blocks:** nothing — proceeding on the default.
+
+In campaign 1 (refactor), `tests/test_config_validation.py::test_b1_baseline_fixture_exact_round_trip` and `tests/test_config_modes.py::test_apply_overrides_locked_against_b1_fingerprint` were written to verify that `configs/unified.yaml` was byte-identical to `tests/fixtures/baseline/config_{mode}.json`.
+In campaign 2 (science-baseline), `configs/unified.yaml` is intentionally modified on purpose (G1 points `slt_path` to `data/static/slt_1deg.nc`, G2 updates `model_type: full`, G3 updates `norm_stats.msl`), while `tests/fixtures/baseline/` must remain byte-identical historical records (`01_TARGET_STATE.md` §D9).
+Comparing `configs/unified.yaml` directly against historical baseline fixtures causes all five tests to fail upon any intentional configuration modification.
+
+**Proposed default:** Update `test_b1_baseline_fixture_exact_round_trip` to validate that the B1 baseline fixtures round-trip through Pydantic `Config.model_validate(expected_dict).to_dict() == expected_dict` directly, and update `test_apply_overrides_locked_against_b1_fingerprint` to apply overrides to `baseline_fingerprint['config_baseline']`. This ensures `tests/fixtures/baseline/` remains an immutable historical benchmark while allowing `configs/unified.yaml` to evolve across the science campaign.
 
 **ANSWER (human, YYYY-MM-DD):**
