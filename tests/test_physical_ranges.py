@@ -47,20 +47,16 @@ def test_surface_variables_physical_bounds(synthetic_dataset: LANLMJODataset) ->
     msl = surf["msl"]
     assert 47000.0 <= msl.min().item(), f"msl min {msl.min().item()} < 47,000 Pa"
     assert msl.max().item() <= 108000.0, f"msl max {msl.max().item()} > 108,000 Pa"
-    assert (
-        96000.0 <= msl.mean().item() <= 99000.0
-    ), f"msl mean {msl.mean().item()} outside [96000, 99000]"
+    msl_mean = msl.mean().item()
+    assert 96000.0 <= msl_mean <= 99000.0, f"msl mean {msl_mean} outside [96000, 99000]"
 
     # 4. ttr: W/m^2, strictly negative, plausible mean -250 to -215, hard bounds -400 to -50
     ttr = surf["ttr"]
     assert -400.0 <= ttr.min().item(), f"ttr min {ttr.min().item()} < -400"
     assert ttr.max().item() <= -50.0, f"ttr max {ttr.max().item()} > -50"
-    assert (
-        -250.0 <= ttr.mean().item() <= -215.0
-    ), f"ttr mean {ttr.mean().item()} outside [-250, -215]"
-    assert (
-        ttr.max().item() < 0.0
-    ), "ttr must be strictly negative (downward-positive flux convention)"
+    ttr_mean = ttr.mean().item()
+    assert -250.0 <= ttr_mean <= -215.0, f"ttr mean {ttr_mean} outside [-250, -215]"
+    assert ttr.max().item() < 0.0, "ttr must be strictly negative"
 
     # 5. tcwv: kg/m^2, strictly non-negative, plausible mean 18-26, hard bounds 0-100
     tcwv = surf["tcwv"]
@@ -120,9 +116,8 @@ def test_named_traps_verdicts(synthetic_dataset: LANLMJODataset) -> None:
     # Trap 2: surface z mean / 9.80665 ≈ 378 m
     z_surf_mean = batch.static_vars["z"].mean().item()
     equiv_h = z_surf_mean / 9.80665
-    assert (
-        abs(equiv_h - 378.0) < 30.0
-    ), f"TRAP 2: Surface z mean / 9.80665 is {equiv_h} m, not ~378 m!"
+    diff_h = abs(equiv_h - 378.0)
+    assert diff_h < 30.0, f"TRAP 2: Surface z mean / 9.80665 is {equiv_h} m"
 
     # Trap 3: q spans 4 orders of magnitude across 13 levels
     plevs = list(synthetic_dataset.atmos_levels)
@@ -141,16 +136,13 @@ def test_static_variables_constraints(synthetic_dataset: LANLMJODataset) -> None
 
     # lsm in [0, 1]
     lsm = statics["lsm"]
-    assert (
-        0.0 <= lsm.min().item() and lsm.max().item() <= 1.0
-    ), f"lsm outside [0, 1]: [{lsm.min().item()}, {lsm.max().item()}]"
+    assert 0.0 <= lsm.min().item() and lsm.max().item() <= 1.0, "lsm outside [0, 1]"
 
     # slt categorical integers 0..7
     slt = statics["slt"]
     slt_unique = torch.unique(slt).cpu().numpy()
-    assert all(
-        float(x).is_integer() and 0 <= x <= 7 for x in slt_unique
-    ), f"slt contains invalid categorical values: {slt_unique}"
+    is_valid_slt = all(float(x).is_integer() and 0 <= x <= 7 for x in slt_unique)
+    assert is_valid_slt, f"slt contains invalid categorical values: {slt_unique}"
 
 
 def test_normalization_sigmas_on_synthetic_data(synthetic_dataset: LANLMJODataset) -> None:
@@ -178,6 +170,4 @@ def test_normalization_sigmas_on_synthetic_data(synthetic_dataset: LANLMJODatase
             std_val = norm_stats["atmos"][var][plev]["std"]
             norm_t = (t_cpu[:, :, idx, :, :] - mean_val) / std_val
             worst_sigma = float(torch.abs(norm_t).max().item())
-            assert (
-                worst_sigma < 10.0
-            ), f"Pathological sigma for {var}@{plev}hPa: {worst_sigma:.2f} >= 10 σ"
+            assert worst_sigma < 10.0, f"Pathological sigma {var}@{plev}: {worst_sigma:.2f} >= 10 σ"
