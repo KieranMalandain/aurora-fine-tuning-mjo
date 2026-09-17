@@ -40,7 +40,7 @@ data:
   pin_memory: true
 
 model:
-  model_type: "small"
+  model_type: "full"
   use_lora: false
   lora_mode: "single"
   gradient_checkpointing: false   # v3: OFF — triggers IMA (handoff §2)
@@ -128,6 +128,7 @@ modes:
     experiment: { name: "phase1_baseline" }
     checkpointing: { save_dir: "checkpoints/baseline" }
     training:
+      require_full_model: true
       epochs: 3
       optimizer: { lr: 1.0e-4 }
 
@@ -143,6 +144,7 @@ modes:
         tropics_bbox: [-20, 20]
         dt_seconds: 21600
     training:
+      require_full_model: true
       epochs: 3
       optimizer: { lr: 5.0e-5 }
 
@@ -156,6 +158,7 @@ modes:
       lora_mode: "single"
       gradient_checkpointing: false     # detached rollout does not need it
     training:
+      require_full_model: true
       epochs: 4
       optimizer: { lr: 5.0e-5 }
       scheduler: { warmup_steps: 200 }
@@ -183,6 +186,7 @@ modes:
         tropics_bbox: [-20, 20]
         dt_seconds: 21600
     training:
+      require_full_model: true
       epochs: 6
       optimizer: { lr: 3.0e-5 }
       scheduler: { warmup_steps: 100 }

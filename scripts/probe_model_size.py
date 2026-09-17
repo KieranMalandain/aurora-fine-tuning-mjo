@@ -67,41 +67,44 @@ from pathlib import Path
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 # Workaround for NERSC Errno 524 filelock issue with huggingface_hub
-if "NERSC_HOST" in os.environ:
-    os.environ.setdefault("HF_HUB_DISABLE_FILE_LOCKS", "1")
-    try:
-        import filelock
+os.environ.setdefault("HF_HUB_DISABLE_FILE_LOCKING", "1")
+os.environ.setdefault("HF_HUB_DISABLE_FILE_LOCKS", "1")
+try:
+    import filelock
 
-        class DummyLock:
-            def __init__(self, *args, **kwargs):
-                pass
+    class DummyLock:
+        def __init__(self, *args, **kwargs):
+            pass
 
-            def acquire(self, *args, **kwargs):
-                return self
+        def acquire(self, *args, **kwargs):
+            return self
 
-            def release(self, *args, **kwargs):
-                pass
+        def release(self, *args, **kwargs):
+            pass
 
-            def __enter__(self):
-                return self
+        def __enter__(self):
+            return self
 
-            def __exit__(self, *args, **kwargs):
-                pass
+        def __exit__(self, *args, **kwargs):
+            pass
 
-        filelock.FileLock = DummyLock
-    except ImportError:
-        pass
+    filelock.FileLock = DummyLock
+    filelock.SoftFileLock = DummyLock
+    if hasattr(filelock, "BaseFileLock"):
+        filelock.BaseFileLock = DummyLock
+except ImportError:
+    pass
 
-    if "HF_HOME" not in os.environ:
-        scratch = os.environ.get("PSCRATCH") or os.environ.get("SCRATCH")
-        if scratch:
-            os.environ["HF_HOME"] = f"{scratch}/hf_home"
-        else:
-            os.environ["HF_HOME"] = f"/tmp/hf_home_{os.environ.get('USER', 'default')}"
+if "HF_HOME" not in os.environ:
+    scratch = os.environ.get("PSCRATCH") or os.environ.get("SCRATCH")
+    if scratch:
+        os.environ["HF_HOME"] = f"{scratch}/hf_home"
+    else:
+        os.environ["HF_HOME"] = f"/tmp/hf_home_{os.environ.get('USER', 'default')}"
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-RESULTS_DIR = Path(__file__).resolve().parent / "probe_results"
+RESULTS_DIR = Path(__file__).resolve().parent.parent / "tools" / "probe_results"
 
 
 def _deep_merge(base: dict, overlay: dict) -> dict:
@@ -136,8 +139,8 @@ def load_config(path: str, mode: str) -> dict:
     return raw
 
 
-def make_synth_batch(surf_vars, atmos_vars, device, H=720, W=1440, L=13):
-    """Real-resolution synthetic Batch. Values are ~N(0,1) — a reasonable
+def make_synth_batch(surf_vars, atmos_vars, device, H=180, W=360, L=13):
+    """Native 1° resolution synthetic Batch (180x360). Values are ~N(0,1) — a reasonable
     proxy for *normalized* inputs; this probe is about memory/throughput,
     not numerical correctness (that's what Task A4's smoke test verifies)."""
     from datetime import datetime
@@ -149,8 +152,8 @@ def make_synth_batch(surf_vars, atmos_vars, device, H=720, W=1440, L=13):
     atmos = {k: torch.randn(1, 2, L, H, W, device=device) for k in atmos_vars}
     static = {k: torch.randn(H, W, device=device) for k in ("z", "lsm", "slt")}
     meta = Metadata(
-        lat=torch.linspace(90, -90, H),
-        lon=torch.linspace(0, 360, W + 1)[:-1],
+        lat=torch.linspace(89.5, -89.5, H),
+        lon=torch.linspace(0.5, 359.5, W),
         time=(datetime(2016, 1, 1, 6),),
         atmos_levels=(50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 850, 925, 1000),
         rollout_step=0,
@@ -158,7 +161,7 @@ def make_synth_batch(surf_vars, atmos_vars, device, H=720, W=1440, L=13):
     return Batch(surf_vars=surf, atmos_vars=atmos, static_vars=static, metadata=meta)
 
 
-def run_probe(size: str, cfg: dict, steps: int, warmup: int) -> dict:
+def run_probe(size: str, cfg: dict, steps: int, warmup: int, checkpointing: bool = False) -> dict:
     import torch
     from torch import nn
 
@@ -173,25 +176,17 @@ def run_probe(size: str, cfg: dict, steps: int, warmup: int) -> dict:
         f"alloc_conf={os.environ.get('PYTORCH_CUDA_ALLOC_CONF', '<unset>')}"
     )
 
+    resolved_size = "full" if size in ("full", "huge") else "small"
     model_cfg = dict(cfg.get("model", {}))
-    model_cfg["model_type"] = size  # "huge" -> full Aurora, else -> small
-    if model_cfg.get("gradient_checkpointing", False):
-        # Gameplan explicitly says not to enable this casually (known IMA,
-        # handoff §2 / probe_ima_matrix.py). Force it off for the probe
-        # regardless of what's in the config, and say so loudly.
-        print(
-            "[probe] WARNING: gradient_checkpointing=true in config — "
-            "forcing OFF for this probe (known IMA risk; see FIX 5 / "
-            "scripts/probe_ima_matrix.py). Re-enable only after that "
-            "matrix finds a crash-free configuration."
-        )
-        model_cfg["gradient_checkpointing"] = False
+    model_cfg["model_type"] = resolved_size
+    model_cfg["gradient_checkpointing"] = checkpointing
+    print(f"[probe] model_type={resolved_size!r}, gradient_checkpointing={checkpointing}")
 
     from aurora_mjo.loss import TropicalWeightedL1Loss
     from aurora_mjo.model import load_model
 
     norm_stats = model_cfg.get("norm_stats") or None
-    print(f"\n=== Loading model_type={size!r} via the real load_model() path ===")
+    print(f"\n=== Loading model_type={resolved_size!r} via the real load_model() path ===")
     model = load_model(model_cfg, norm_stats=norm_stats).to(device)
 
     surf_vars = tuple(model_cfg["surface_variables"])
@@ -222,7 +217,7 @@ def run_probe(size: str, cfg: dict, steps: int, warmup: int) -> dict:
     max_grad_norm = float(train_cfg.get("max_grad_norm", 1.0))
 
     loss_cfg = cfg.get("loss", {}).get("grid", {})
-    lat_coords = torch.linspace(90, -90, 720)
+    lat_coords = torch.linspace(89.5, -89.5, 180)
     grid_loss_fn = TropicalWeightedL1Loss(
         lat_coords=lat_coords,
         tropics_bbox=loss_cfg.get("tropics_bbox", [-20, 20]),
@@ -230,10 +225,10 @@ def run_probe(size: str, cfg: dict, steps: int, warmup: int) -> dict:
         extratropics_weight=loss_cfg.get("extratropics_weight", 0.1),
     ).to(device)
 
-    batch = make_synth_batch(surf_vars, atmos_vars, device)
+    batch = make_synth_batch(surf_vars, atmos_vars, device, H=180, W=360)
     target = {
-        **{k: torch.randn(1, 720, 1440, device=device) for k in surf_vars},
-        **{k: torch.randn(1, 13, 720, 1440, device=device) for k in atmos_vars},
+        **{k: torch.randn(1, 180, 360, device=device) for k in surf_vars},
+        **{k: torch.randn(1, 13, 180, 360, device=device) for k in atmos_vars},
     }
 
     print(
@@ -310,7 +305,8 @@ def run_probe(size: str, cfg: dict, steps: int, warmup: int) -> dict:
     mean_step_s = sum(step_times) / max(len(step_times), 1)
 
     result = {
-        "size": size,
+        "size": resolved_size,
+        "checkpointing": checkpointing,
         "status": "OK",
         "peak_mem_gib": round(peak_gib, 3),
         "mean_step_s": round(mean_step_s, 4),
@@ -323,7 +319,7 @@ def run_probe(size: str, cfg: dict, steps: int, warmup: int) -> dict:
         ),
     }
     print(
-        f"\n=== RESULT size={size!r}: peak_mem={peak_gib:.2f} GiB "
+        f"\n=== RESULT size={resolved_size!r} ckpt={checkpointing}: peak_mem={peak_gib:.2f} GiB "
         f"({result['total_gpu_gib']:.0f} GiB card) | "
         f"mean_step={mean_step_s * 1000:.0f}ms | "
         f"trainable_params={n_trainable:,} | "
@@ -336,43 +332,45 @@ def run_probe(size: str, cfg: dict, steps: int, warmup: int) -> dict:
 
 def _save_result(result: dict):
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    path = RESULTS_DIR / f"{result['size']}.json"
+    ckpt_tag = "ckpt_on" if result.get("checkpointing", False) else "ckpt_off"
+    path = RESULTS_DIR / f"{result['size']}_{ckpt_tag}.json"
     with open(path, "w") as f:
+        json.dump(result, f, indent=2)
+    # Also save standard <size>.json for compatibility with --decide
+    compat_path = RESULTS_DIR / f"{result['size']}.json"
+    with open(compat_path, "w") as f:
         json.dump(result, f, indent=2)
     print(f"[probe] wrote {path}")
 
 
 def decide(cfg: dict, session_hours: float = 3.5):
-    """Combine both sizes' saved results into the gameplan's decision rule:
-    'Pick full iff it fits in memory with headroom and its per-step time
-    lets baseline finish in <=~2 sessions. Otherwise small.'
-
-    'Fits with headroom' here means peak_mem_gib <= 90% of the card's total
-    memory — tune if you want a different margin. Total baseline work is
-    read from the MERGED config (mode overlay applied): epochs *
-    min(len(loader), max_steps_per_epoch) micro-steps, each ~= one probe
-    step (this probe's per-step time already includes the optimizer step;
-    grad-accumulation doesn't add activation memory, only more micro-steps
-    per optimizer step, so this estimate is conservative-correct for wall
-    time either way).
-    """
-    small_path = RESULTS_DIR / "small.json"
-    huge_path = RESULTS_DIR / "huge.json"
-    if not small_path.exists() or not huge_path.exists():
-        missing = [p.name for p in (small_path, huge_path) if not p.exists()]
+    """Combine saved results into the decision rule."""
+    small_path = (
+        RESULTS_DIR / "small.json"
+        if (RESULTS_DIR / "small.json").exists()
+        else RESULTS_DIR / "small_ckpt_off.json"
+    )
+    full_path = (
+        RESULTS_DIR / "full.json"
+        if (RESULTS_DIR / "full.json").exists()
+        else (
+            RESULTS_DIR / "full_ckpt_off.json"
+            if (RESULTS_DIR / "full_ckpt_off.json").exists()
+            else RESULTS_DIR / "huge.json"
+        )
+    )
+    if not small_path.exists() or not full_path.exists():
+        missing = [p.name for p in (small_path, full_path) if not p.exists()]
         print(f"[decide] Missing result file(s): {missing}. Run both sizes first:")
         print("  python scripts/probe_model_size.py --size small --config ... --mode ...")
-        print("  python scripts/probe_model_size.py --size huge  --config ... --mode ...")
+        print("  python scripts/probe_model_size.py --size full  --config ... --mode ...")
         sys.exit(1)
 
     small = json.load(open(small_path))
-    huge = json.load(open(huge_path))
+    full = json.load(open(full_path))
 
     epochs = int(cfg.get("training", {}).get("epochs", 3))
     max_spe = cfg.get("training", {}).get("max_steps_per_epoch")
-    # We don't have the real dataloader length here (no data access needed
-    # for this probe); max_steps_per_epoch is the effective cap in
-    # unified.yaml for every mode, so use it directly.
     steps_per_epoch = int(max_spe) if max_spe else 2500
     total_micro_steps = epochs * steps_per_epoch
     session_budget_s = session_hours * 3600
@@ -383,7 +381,7 @@ def decide(cfg: dict, session_hours: float = 3.5):
         f"({session_budget_s:.0f}s, leaves ~30min/4h margin for checkpointing/setup)\n"
     )
 
-    for r in (small, huge):
+    for r in (small, full):
         if r.get("status") != "OK":
             print(
                 f"  {r['size']:>5}: status={r.get('status')} "
@@ -407,17 +405,17 @@ def decide(cfg: dict, session_hours: float = 3.5):
         "\n[decide] Recommendation (ratify or override — Part 4 item 1 is a "
         "human decision):"
     )
-    if huge.get("status") == "OK":
-        headroom = 1.0 - huge["peak_mem_gib"] / huge["total_gpu_gib"]
-        total_s = total_micro_steps * huge["mean_step_s"]
+    if full.get("status") == "OK":
+        headroom = 1.0 - full["peak_mem_gib"] / full["total_gpu_gib"]
+        total_s = total_micro_steps * full["mean_step_s"]
         sessions = -(-total_s // session_budget_s)
         if headroom >= 0.10 and sessions <= 2:
             print(
-                "  -> FULL ('huge'). Fits with headroom and finishes baseline "
+                "  -> FULL (1.3B). Fits with headroom and finishes baseline "
                 "in <=2 sessions. Full also has stabilise_level_agg=True by "
                 "default (more NaN-resistant) — prefer it per §0.3."
             )
-            return "huge"
+            return "full"
         print(
             f"  -> full does not clear the bar (headroom={headroom * 100:.0f}%, "
             f"~{int(sessions)} sessions needed) — falling back to SMALL, "
@@ -434,9 +432,15 @@ def main():
     )
     ap.add_argument(
         "--size",
-        choices=["small", "huge"],
+        choices=["small", "full", "huge"],
         default=None,
         help="Which model size to probe. Omit only when using --decide.",
+    )
+    ap.add_argument(
+        "--checkpointing",
+        action="store_true",
+        default=False,
+        help="Enable activation checkpointing.",
     )
     ap.add_argument("--config", default="configs/unified.yaml")
     ap.add_argument(
@@ -475,7 +479,13 @@ def main():
         return
     if args.size is None:
         ap.error("--size is required unless --decide is given")
-    run_probe(args.size, cfg, steps=args.steps, warmup=args.warmup)
+    run_probe(
+        args.size,
+        cfg,
+        steps=args.steps,
+        warmup=args.warmup,
+        checkpointing=args.checkpointing,
+    )
 
 
 if __name__ == "__main__":
