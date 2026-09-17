@@ -1,15 +1,15 @@
 # Living Project State
 
 **Last Updated:** 2026-09-17  
-**Active Phase:** Campaign `science-baseline` underway (Tasks G1 & G2 implemented); preparing for Task G3 (True Normalisation Statistics).  
+**Active Phase:** Campaign `science-baseline` underway (Tasks G1, G2, G3 implemented); preparing for Task G4 (Physical Sanity Fingerprint).  
 
 ---
 
 ## 1. Next Action
 
-> **Implement Task G3 (True Normalisation Statistics): run `scripts/calc_norm_stats.py` over training years 1980–2015 on 1° ERA5 archive; replace placeholder constants for `msl`, `ttr`, and `tcwv` in `configs/unified.yaml`.**
+> **Implement Task G4 (Physical Sanity Fingerprint): author 1° physical range and physical sanity regression test suite (`tests/fixtures/science-baseline/`); replace historical behavioural equivalence gates.**
 
-**Justification:** Tasks G1 (1° native resolution) and G2 (1.3B model scale verified at 14.69 GiB peak memory, 221 ms/step) have established the full-scale computational foundation. G3 will eliminate the uncalibrated normalisation placeholders before training.
+**Justification:** Tasks G1 (1° native resolution), G2 (1.3B model scale), and G3 (true 1980–2015 normalisation statistics) have completed the model and data substrate overhaul. G4 establishes the physical sanity gate at 1°.
 
 *Campaign Synthesis & Next Steps:* See [`docs/campaigns/science-baseline/README.md`](campaigns/science-baseline/README.md) for full campaign plan and execution roadmap.
 
@@ -19,6 +19,7 @@
 
 | Component / Subsystem | Status | Evidence / Reference | Notes |
 | :--- | :--- | :--- | :--- |
+| **Normalisation Statistics (1980–2015)** | **GREEN** | Task G3 (`src/aurora_mjo/stats.py`, `configs/norm_stats_1980_2015.yaml`) | True statistics computed across all 4,752 files (3.4B samples/field) at 1° native resolution via Welford parallel reduction; surface variables use native Aurora `surf_stats` constructor hook; placeholder values retired; `test_placeholder_norm_stats_guard` passing (0 xfail). |
 | **Model Scale (1.3B Backbone)** | **GREEN** | Task G2 (`model.py`, `config.py`, `cli_support.py`) | `model_type: full` selects `AuroraPretrained` (1.26B total params); `small` (`AuroraSmallPretrained`) confined to smoke/CI; `huge` retired; production enforces `require_full_model: true`; 1° peak memory 14.69 GiB (81.6% free VRAM), step time 221 ms; Lesson 6 constraint dissolved. |
 | **Native Resolution Ingestion** | **GREEN** | Task G1 (`src/aurora_mjo/dataset.py`, `trainer.py`) | Both upsamplers deleted; 1° grid coordinates dynamically loaded from CFS archive; slt regridded to 1° (`data/static/slt_1deg.nc`); forward pass finite. |
 | **Package Structure** | **GREEN** | Task C1 (`src/aurora_mjo/`) | First-party package installed via Hatchling; third-party `aurora` collision resolved. |
@@ -42,20 +43,18 @@ Measured locally via `uv run pytest --collect-only`:
 
 | Category / Marker | Count | Execution Context | Verified In Tasks |
 | :--- | :--- | :--- | :--- |
-| **Default CI Path** (offline, synthetic CPU) | **89** (88 pass, 1 xfail) | Local dev, GitHub Actions (`ubuntu-latest`) | A3, D1–D3, E1–E2, G1, G2 |
+| **Default CI Path** (offline, synthetic CPU) | **94** (94 pass, 0 xfail) | Local dev, GitHub Actions (`ubuntu-latest`) | A3, D1–D3, E1–E2, G1, G2, G3 |
 | **`needs_data`** (requires CFS archive) | 5 | NERSC Perlmutter login / compute node | D2, D3, E1, G1 |
 | **`needs_gpu`** (requires CUDA device) | 3 | NERSC Perlmutter GPU compute node | D2, G2 |
 | **`slow`** (rollout simulation > 5s) | 1 | NERSC Perlmutter GPU compute node | D2 |
 | **`live`** (external network / HF Hub) | 0 | N/A (all offline) | D2 |
-| **Total Test Suite** | **96** | Full suite passes across environments | F1, G1, G2 |
-
-*Note: The single `xfail` test (`tests/test_norm_stats.py::test_placeholder_stats_warning_or_failure`) tracks the open requirement to replace the `msl` placeholder constants.*
+| **Total Test Suite** | **102** | Full suite passes across environments | F1, G1, G2, G3 |
 
 ---
 
 ## 4. Open Checklist
 
-- [ ] **Compute True Normalisation Statistics (OPEN-01):** Run `scripts/calc_norm_stats.py` over training years 1980–2015 on Perlmutter; update `configs/unified.yaml` and resolve `test_placeholder_stats_warning_or_failure` (Task G3).
+- [x] **Compute True Normalisation Statistics (OPEN-01):** Computed true statistics over 1980–2015 at 1° native resolution via Welford parallel reduction; saved to `configs/norm_stats_1980_2015.yaml`; updated `configs/unified.yaml`; migrated to `surf_stats` constructor hook; `test_placeholder_norm_stats_guard` passing (Task G3).
 - [x] **Relocate `slt_data.nc` (Q-07 / Q-17):** Regridded categorical soil type to 1° via nearest neighbour; saved and committed to `data/static/slt_1deg.nc` (~19.6 kB); removed purgeable scratch dependency; updated `configs/unified.yaml`.
 - [x] **Model Scale Benchmark (Task G2):** Mapped `model_type: full` to `AuroraPretrained` (1.3B Swin3D backbone); retired `huge`; measured exact parameter counts (1,256,365,744 base); measured peak memory (14.69 GiB) and step time (221 ms) at 1°; Lesson 6 constraint dissolved.
 - [ ] **Enable GitHub Branch Protection (Human Action):** Configure GitHub repository rulesets for `main` requiring pull requests and `scripts/check.py` CI status check approval.

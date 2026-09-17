@@ -36,9 +36,13 @@ from aurora_mjo.model import load_model
 
 MODES = ("baseline", "physics_informed", "lora", "combined")
 
-# Known placeholder values currently placed in configs/unified.yaml
+# Known placeholder values from earlier refactor campaign (must not be active)
 PLACEHOLDER_MSL_MEAN = 96667.9822
 PLACEHOLDER_MSL_STD = 9504.6359
+
+# True values computed over 1980–2015 training record at native 1° resolution (Task G3)
+TRUE_MSL_MEAN = 96668.7494
+TRUE_MSL_STD = 9504.4086
 
 
 @pytest.fixture
@@ -67,13 +71,12 @@ def test_msl_override_present_in_all_modes(config_path: Path) -> None:
         assert msl_cfg["std"] > 0, f"Mode '{mode}' msl std must be positive."
 
 
-def test_msl_override_applied_to_aurora_locations_and_scales(
+def test_surface_stats_applied_via_aurora_surf_stats_without_global_mutation(
     config_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Verify load_model actively mutates aurora.normalisation.locations and scales.
-
-    An override that is parsed into the config but not passed to Aurora's global
-    normalisation tables would silently fail to protect the model from -36 sigma inputs.
+    """Verify load_model passes surface variables via Aurora's native surf_stats
+    constructor hook, preventing process-global mutation of aurora.normalisation.locations
+    and scales (G3 Step 6).
     """
     monkeypatch.setattr(Aurora, "load_checkpoint", lambda self, strict=True: None)
 
@@ -82,21 +85,27 @@ def test_msl_override_applied_to_aurora_locations_and_scales(
     msl_mean = model_cfg["norm_stats"]["msl"]["mean"]
     msl_std = model_cfg["norm_stats"]["msl"]["std"]
 
-    # Record and preserve original global values
     orig_loc = locations.get("msl")
     orig_scale = scales.get("msl")
 
     try:
-        # Intentionally tamper global tables before load_model to verify they get overwritten
+        # Set dummy values in global tables
         locations["msl"] = 100958.0
         scales["msl"] = 1332.0
 
-        load_model(model_cfg, norm_stats=model_cfg.get("norm_stats"))
+        model = load_model(model_cfg, norm_stats=model_cfg.get("norm_stats"))
 
-        assert locations["msl"] == msl_mean, "locations['msl'] not updated to config mean"
-        assert scales["msl"] == msl_std, "scales['msl'] not updated to config std"
+        # Verify backbone surf_stats contains the override
+        assert hasattr(model.backbone, "surf_stats"), "backbone missing surf_stats attribute"
+        assert "msl" in model.backbone.surf_stats, "msl missing from backbone.surf_stats"
+        loc, scale = model.backbone.surf_stats["msl"]
+        assert loc == pytest.approx(msl_mean), "backbone.surf_stats['msl'] location mismatch"
+        assert scale == pytest.approx(msl_std), "backbone.surf_stats['msl'] scale mismatch"
+
+        # Verify global locations and scales were NOT mutated for surface variables
+        assert locations["msl"] == 100958.0, "global locations['msl'] should not be mutated"
+        assert scales["msl"] == 1332.0, "global scales['msl'] should not be mutated"
     finally:
-        # Restore global state so other tests are not polluted
         if orig_loc is not None:
             locations["msl"] = orig_loc
         if orig_scale is not None:
@@ -104,15 +113,12 @@ def test_msl_override_applied_to_aurora_locations_and_scales(
 
 
 def test_placeholder_norm_stats_guard(config_path: Path) -> None:
-    """Detect if placeholder normalisation statistics are currently active.
+    """Verify placeholder normalisation statistics have been replaced by true 1980–2015 values.
 
-    The current msl override values (mean=96667.9822, std=9504.6359) are Aurora's own
-    built-in `sp` stats, used as a stopgap to unblock development. They are not stats
-    computed over this dataset's training years.
-    Per 00_CONTEXT.md §5 and D3 task spec:
-      - This test must XFAIL (or warn), not hard-fail, because computing real stats
-        is out of scope for this refactoring campaign.
-      - It explicitly names `scripts/calc_norm_stats.py` as the required fix.
+    Task G3 replaces Aurora's placeholder sp constants with true values computed by
+    Welford accumulation over 1980–2015 in configs/norm_stats_1980_2015.yaml.
+    This test inverts the earlier xfail into a hard assertion that placeholder values
+    are completely absent.
     """
     cfg = load_config(config_path, mode="baseline")
     msl_stats = cfg["model"]["norm_stats"]["msl"]
@@ -122,23 +128,35 @@ def test_placeholder_norm_stats_guard(config_path: Path) -> None:
         and abs(msl_stats["std"] - PLACEHOLDER_MSL_STD) < 1e-3
     )
 
-    if is_placeholder:
-        pytest.xfail(
-            f"msl norm_stats in configs/unified.yaml are PLACEHOLDER values "
-            f"({msl_stats['mean']}, {msl_stats['std']}). "
-            f"Must be replaced by computing real statistics over 1980–2015 using "
-            f"`scripts/calc_norm_stats.py` before executing production science runs."
-        )
+    assert not is_placeholder, (
+        f"msl norm_stats in configs/unified.yaml must NOT be placeholder values "
+        f"({PLACEHOLDER_MSL_MEAN}, {PLACEHOLDER_MSL_STD})."
+    )
+
+    # Assert active values match true computed 1980–2015 statistics
+    assert msl_stats["mean"] == pytest.approx(TRUE_MSL_MEAN, abs=1e-2)
+    assert msl_stats["std"] == pytest.approx(TRUE_MSL_STD, abs=1e-2)
+
+    # Also assert placeholder numbers do not appear in any configuration files
+    configs_dir = config_path.parent
+    for cfg_file in configs_dir.glob("*.yaml"):
+        content = cfg_file.read_text()
+        assert "96667" not in content, f"Found placeholder '96667' in {cfg_file.name}"
+        assert "9504.6" not in content, f"Found placeholder '9504.6' in {cfg_file.name}"
+
+
+# Alias matching task specification
+test_placeholder_stats_warning_or_failure = test_placeholder_norm_stats_guard
 
 
 def test_sigma_arithmetic_tibetan_plateau() -> None:
-    """Executable verification of Lesson 1 sigma arithmetic from 03_DOMAIN_PRIORS.md §4.
+    """Executable verification of Lesson 1 sigma arithmetic with true computed normalisation stats.
 
     Tibetan Plateau surface pressure at ~5,300 m elevation is roughly 52,000 Pa.
     1. Under Aurora's built-in MSL constants (mean=100958, scale=1332):
          (52000 - 100958) / 1332 = -36.76 sigma -> FATAL: drives validation loss to NaN.
-    2. Under the surface pressure override (mean=96668, scale=9505):
-         (52000 - 96668) / 9505 = -4.70 sigma -> REASONABLE: within physical dynamic range.
+    2. Under the true surface pressure override (mean=96668.7494, scale=9504.4086):
+         (52000 - 96668.75) / 9504.41 = -4.70 sigma -> REASONABLE: within physical dynamic range.
     """
     p_high_terrain = 52000.0  # Pa (~5.3 km elevation)
 
@@ -152,17 +170,18 @@ def test_sigma_arithmetic_tibetan_plateau() -> None:
         f"got {sigma_builtin:.2f} sigma."
     )
 
-    # Config override parameters
-    override_loc = PLACEHOLDER_MSL_MEAN
-    override_scale = PLACEHOLDER_MSL_STD
+    # True config override parameters
+    override_loc = TRUE_MSL_MEAN
+    override_scale = TRUE_MSL_STD
 
     sigma_override = (p_high_terrain - override_loc) / override_scale
-    assert -6.0 < sigma_override < -4.0, (
-        f"Expected override normalisation to be manageable (-6 to -4 sigma), "
+    assert -5.0 < sigma_override < -4.0, (
+        f"Expected override normalisation to be manageable (-5 to -4 sigma), "
         f"got {sigma_override:.2f} sigma."
     )
+    assert sigma_override == pytest.approx(-4.6998, abs=1e-2)
 
-    # Scale factor ratio: surface pressure varies ~7x more than MSL across global topography
+    # Scale factor ratio: surface pressure varies ~7.1x more than MSL across global topography
     scale_ratio = override_scale / aurora_msl_scale
     assert scale_ratio > 7.0, f"Expected override scale to be >7x MSL scale, got {scale_ratio:.2f}x"
 
