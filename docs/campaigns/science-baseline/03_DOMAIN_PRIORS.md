@@ -188,7 +188,7 @@ skill.
 
 ---
 
-## 6. Compute — what 1° should cost
+## 6. Compute — what 1° costs (MEASURED in G2)
 
 | Quantity | Value | Provenance |
 | --- | --- | --- |
@@ -196,18 +196,24 @@ skill.
 | `huge` peak memory, 0.25°, no ckpt | 78.41 GiB (**OOM**) | as above |
 | `small` mean step time, 0.25° | 0.694 s | as above |
 | Grid-point reduction, 0.25° → 1° | **16.0×** | DERIVED |
-| `full` peak memory, 1°, bs 1 | **~5 – 12 GiB** | **DERIVED, WEAK.** Activation memory should fall ~16×; parameter and optimiser state do not. **G2 measures it.** |
-| `full` step time, 1° | **~1 – 3 s** | **DERIVED, WEAK.** Windowed attention is roughly linear in tokens, but the 1.3B model is ~11× the parameters of `small`. **G2 measures it.** |
+| `small` peak memory, 1°, ckpt off | **3.12 GiB** | **MEASURED** — G2 benchmark (Perlmutter A100-SXM4-80GB) |
+| `small` peak memory, 1°, ckpt on | **2.04 GiB** | **MEASURED** — G2 benchmark |
+| `small` mean step time, 1°, ckpt off | **77.2 ms** (0.077 s) | **MEASURED** — G2 benchmark |
+| `small` mean step time, 1°, ckpt on | **110.1 ms** (0.110 s) | **MEASURED** — G2 benchmark |
+| `full` peak memory, 1°, bs 1, ckpt off | **14.69 GiB** | **MEASURED** — G2 benchmark |
+| `full` peak memory, 1°, bs 1, ckpt on | **12.52 GiB** | **MEASURED** — G2 benchmark |
+| `full` mean step time, 1°, ckpt off | **221.4 ms** (0.221 s) | **MEASURED** — G2 benchmark |
+| `full` mean step time, 1°, ckpt on | **301.8 ms** (0.302 s) | **MEASURED** — G2 benchmark |
 
-The §6 rows marked WEAK are the two numbers the whole Phase K schedule depends
-on. **Do not plan a SLURM chain against them before G2.**
+### Evaluation of Prior WEAK Estimates:
+1. **`full` peak memory**: Prior estimate was ~5–12 GiB. Measured is **14.69 GiB** (ckpt off, 22% higher than upper bound) and **12.52 GiB** (ckpt on, 4% above upper bound). Model parameters (1.26B floats) + optimizer state + heads account for ~5 GB static allocation, with activations scaling cleanly. At 14.69 GiB on an 80 GiB A100 card, there is **81.6% memory headroom** (65.3 GiB unused).
+2. **`full` mean step time**: Prior estimate was ~1–3 s/step. Measured is **221.4 ms** (ckpt off) and **301.8 ms** (ckpt on). The prior estimate was **wrong by 4.5×–13.5×** (overly pessimistic). Windowed Swin3D attention at 1° is exceptionally fast on A100.
 
-**Lesson 6 interacts with this.** `gradient_checkpointing: false` exists because
-checkpointing triggers a deterministic illegal memory access on Perlmutter, and
-`model_type: small` was chosen because the 1.3B model did not fit without it. If
-the derived memory numbers hold, **the 1.3B model fits at 1° without
-checkpointing** and the constraint dissolves rather than being worked around.
-That is G2's headline question.
+### Lesson 6 Verdict:
+**The gradient checkpointing constraint has dissolved.**
+- At 1°, `full` fits with 81.6% free VRAM (14.69 GiB peak) without checkpointing.
+- Furthermore, gradient checkpointing was re-tested under 1° on `full` (12.52 GiB peak, 301.8 ms) and ran 30 steps with **zero errors** (no illegal memory access). The IMA crash observed at 0.25° did not occur under the 16× reduced patch resolution.
+- However, since checkpointing adds 36% runtime overhead (301.8 ms vs 221.4 ms) and memory headroom is massive without it, `gradient_checkpointing: false` is optimal and fully unblocked.
 
 ---
 

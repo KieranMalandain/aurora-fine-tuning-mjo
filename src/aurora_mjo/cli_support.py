@@ -9,10 +9,12 @@ from `aurora_mjo.config` for backward compatibility.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import random
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -47,28 +49,45 @@ __all__ = [
 # make the HF cache PERSISTENT: /tmp is node-local and wiped, which forced
 # every job (x4 ranks) to re-download the pretrained weights.
 if "NERSC_HOST" in os.environ:
+    os.environ.setdefault("HF_HUB_DISABLE_FILE_LOCKING", "1")
     os.environ.setdefault("HF_HUB_DISABLE_FILE_LOCKS", "1")
-    # Backup: monkey-patch filelock just in case the env var isn't enough
+    # Backup: monkey-patch filelock and huggingface_hub WeakFileLock
+    class DummyLock:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def acquire(self, *args: Any, **kwargs: Any) -> DummyLock:
+            return self
+
+        def release(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def __enter__(self) -> DummyLock:
+            return self
+
+        def __exit__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+    @contextlib.contextmanager
+    def _dummy_weak_file_lock(*args: Any, **kwargs: Any) -> Any:
+        yield DummyLock()
+
     try:
         import filelock
 
-        class DummyLock:
-            def __init__(self, *args: Any, **kwargs: Any) -> None:
-                pass
-
-            def acquire(self, *args: Any, **kwargs: Any) -> DummyLock:
-                return self
-
-            def release(self, *args: Any, **kwargs: Any) -> None:
-                pass
-
-            def __enter__(self) -> DummyLock:
-                return self
-
-            def __exit__(self, *args: Any, **kwargs: Any) -> None:
-                pass
-
         filelock.FileLock = DummyLock  # type: ignore[misc]
+        filelock.SoftFileLock = DummyLock  # type: ignore[misc]
+        if hasattr(filelock, "BaseFileLock"):
+            filelock.BaseFileLock = DummyLock  # type: ignore[misc]
+    except ImportError:
+        pass
+
+    try:
+        import huggingface_hub.file_download
+        import huggingface_hub.utils._fixes
+
+        huggingface_hub.utils._fixes.WeakFileLock = _dummy_weak_file_lock  # type: ignore[assignment]
+        huggingface_hub.file_download.WeakFileLock = _dummy_weak_file_lock  # type: ignore[assignment]
     except ImportError:
         pass
 
@@ -167,6 +186,8 @@ _AURORA_NATIVE_SURF_VARS = ("2t", "10u", "10v", "msl")
 
 def _patch_config_for_smoke_test(cfg: dict[str, Any]) -> dict[str, Any]:
     log.warning("SMOKE-TEST MODE: overriding config for a single synthetic step.")
+    cfg.setdefault("model", {})["model_type"] = "small"
+    cfg.setdefault("training", {})["require_full_model"] = False
     cfg["training"]["epochs"] = 1
     cfg["training"]["grad_accum_steps"] = 1
     cfg["training"]["time_limit_hours"] = 0
@@ -175,6 +196,45 @@ def _patch_config_for_smoke_test(cfg: dict[str, Any]) -> dict[str, Any]:
     cfg["logging"]["val_every_n_epochs"] = 1
     cfg["checkpointing"]["save_every_n_steps"] = 10**9
     return cfg
+
+
+def _install_checkpoint_provenance_hook() -> None:
+    """Ensure CheckpointManager.save records model_type, checkpoint_name, and aurora_version."""
+    orig_save = CheckpointManager.save
+    if getattr(orig_save, "_provenance_installed", False):
+        return
+
+    def save_with_provenance(
+        self: CheckpointManager,
+        tag: str,
+        model: torch.nn.Module,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Path | None:
+        raw = model.module if hasattr(model, "module") else model
+        model_type = getattr(raw, "model_type", None) or (kwargs.get("config", {}) or {}).get(
+            "model", {}
+        ).get("model_type", "unknown")
+        checkpoint_name = getattr(raw, "checkpoint_name", None) or "unknown"
+        aurora_version = getattr(raw, "aurora_version", None) or "unknown"
+
+        orig_torch_save = torch.save
+
+        def _torch_save_provenance(payload: Any, f: Any, *t_args: Any, **t_kwargs: Any) -> Any:
+            if isinstance(payload, dict) and "format_version" in payload:
+                payload["model_type"] = model_type
+                payload["checkpoint_name"] = checkpoint_name
+                payload["aurora_version"] = aurora_version
+            return orig_torch_save(payload, f, *t_args, **t_kwargs)
+
+        torch.save = _torch_save_provenance  # type: ignore[assignment]
+        try:
+            return orig_save(self, tag, model, *args, **kwargs)
+        finally:
+            torch.save = orig_torch_save  # type: ignore[assignment]
+
+    save_with_provenance._provenance_installed = True  # type: ignore[attr-defined]
+    CheckpointManager.save = save_with_provenance  # type: ignore[assignment]
 
 
 def _install_smoke_test_loader(cfg: dict[str, Any], device: torch.device) -> tuple[Any, Any]:
@@ -342,6 +402,27 @@ def run_train(
     elif warm_start_path is not None:
         log.info(f"Warm-starting model weights from: {warm_start_path}")
         trainer.load_checkpoint(warm_start_path, weights_only=True)
+
+    # Provenance tracking: install checkpoint hook and write metrics.jsonl header
+    _install_checkpoint_provenance_hook()
+    if is_main:
+        import json
+        save_dir_path = Path(save_dir)
+        save_dir_path.mkdir(parents=True, exist_ok=True)
+        metrics_file = save_dir_path / "metrics.jsonl"
+        if not metrics_file.exists() or metrics_file.stat().st_size == 0:
+            raw_model = model.module if hasattr(model, "module") else model
+            header_record = {
+                "type": "header",
+                "model_type": getattr(
+                    raw_model, "model_type", model_cfg.get("model_type", "unknown")
+                ),
+                "checkpoint_name": getattr(raw_model, "checkpoint_name", "unknown"),
+                "aurora_version": getattr(raw_model, "aurora_version", "unknown"),
+                "timestamp": time.time(),
+            }
+            with open(metrics_file, "a") as f:
+                f.write(json.dumps(header_record) + "\n")
 
     # 8. Train
     log.info(

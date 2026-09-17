@@ -81,7 +81,12 @@ records the confirming quote verbatim in its result file. If the docs are
 ambiguous, open an issue on microsoft/aurora as was done for the 1° question
 (#184) and mark G2 `BLOCKED`.
 
-**ANSWER (human, YYYY-MM-DD):**
+**ANSWER (G2, 2026-09-17):**
+Confirmed against official Microsoft Aurora documentation (`https://microsoft.github.io/aurora/example_era5.html`).
+The tutorial explicitly notes:
+> *"The fine-tuned version of Aurora specifically only works with IFS HRES T0, so we use the non-fine-tuned version of Aurora in this example."*
+
+In `microsoft-aurora==1.8.0`, `AuroraPretrained` is the non-fine-tuned foundation model (default checkpoint: `aurora-0.25-pretrained.ckpt`), whereas `Aurora` is the IFS HRES analysis fine-tune (default checkpoint: `aurora-0.25-finetuned.ckpt`). Therefore, `AuroraPretrained` is confirmed as the correct ERA5 base model. Model mapping updated in `model.py:424` for `model_type: full`.
 
 ---
 

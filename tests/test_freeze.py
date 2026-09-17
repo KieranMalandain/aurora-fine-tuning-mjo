@@ -116,3 +116,62 @@ def test_baseline_trainable_param_counts_match_domain_priors() -> None:
     assert trainable_params == 41008, f"Expected 41,008 trainable params, got {trainable_params:,}"
     assert frozen_params == 112789376, f"Expected 112,789,376 frozen params, got {frozen_params:,}"
     assert total_params == 112830384, f"Expected 112,830,384 total params, got {total_params:,}"
+
+
+@pytest.mark.needs_gpu
+def test_freeze_backbone_full_model_gpu() -> None:
+    """Verify freeze_backbone behaves identically on AuroraPretrained (model_type: full)."""
+    import torch
+
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA not available")
+
+    # 1. Baseline full model (no LoRA)
+    config_base: dict[str, Any] = {
+        "model_type": "full",
+        "surface_variables": ["2t", "10u", "10v", "msl", "ttr", "tcwv"],
+        "use_lora": False,
+        "freeze_backbone": True,
+        "gradient_checkpointing": False,
+        "mjo_head": {"enabled": False},
+    }
+    model_base: AuroraMJO = load_model(config_base)
+    backbone = model_base.backbone
+    assert any(not p.requires_grad for p in backbone.parameters())
+
+    # Pretrained surf weights frozen
+    surf_embed = backbone.encoder.surf_token_embeds
+    for var in _AURORA_DEFAULT_SURF_VARS:
+        if var in surf_embed.weights:
+            assert not surf_embed.weights[var].requires_grad
+
+    # Injected surf weights trainable
+    for var in ("ttr", "tcwv"):
+        assert surf_embed.weights[var].requires_grad
+
+    # Injected decoder heads trainable
+    if hasattr(backbone.decoder, "surf_heads"):
+        for var in ("ttr", "tcwv"):
+            assert all(p.requires_grad for p in backbone.decoder.surf_heads[var].parameters())
+
+    # 2. LoRA full model with MJO head
+    config_lora: dict[str, Any] = {
+        "model_type": "full",
+        "surface_variables": ["2t", "10u", "10v", "msl", "ttr", "tcwv"],
+        "use_lora": True,
+        "lora_mode": "single",
+        "freeze_backbone": True,
+        "gradient_checkpointing": False,
+        "mjo_head": {"enabled": True, "hidden_dim": 128},
+    }
+    model_lora: AuroraMJO = load_model(config_lora)
+    lora_params = [
+        p
+        for mod in model_lora.backbone.modules()
+        if isinstance(mod, LoRA | LoRARollout)
+        for p in mod.parameters()
+    ]
+    assert len(lora_params) > 0
+    assert all(p.requires_grad for p in lora_params)
+    assert model_lora.mjo_head is not None
+    assert all(p.requires_grad for p in model_lora.mjo_head.parameters())

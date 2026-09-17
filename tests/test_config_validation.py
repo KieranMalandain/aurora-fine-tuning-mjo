@@ -214,3 +214,56 @@ def test_b1_baseline_fixture_exact_round_trip(mode: str) -> None:
     canonical_json = json.dumps(resolved_dict, indent=2, sort_keys=True) + "\n"
     fixture_content = fixture_path.read_text()
     assert canonical_json == fixture_content, f"Byte diff detected for mode {mode}"
+
+
+# ---------------------------------------------------------------------------
+# Task G2 Model Scale Tests (Step 3 & Step 4)
+# ---------------------------------------------------------------------------
+
+
+def test_model_type_huge_raises_actionable_error(baseline_raw_dict: dict[str, Any]) -> None:
+    """model_type: 'huge' must raise ValidationError explaining HRES vs ERA5."""
+    baseline_raw_dict["model"]["model_type"] = "huge"
+    with pytest.raises(ValidationError) as exc_info:
+        Config.model_validate(baseline_raw_dict)
+    err_msg = str(exc_info.value)
+    assert "model_type 'huge' is retired; use 'full' instead" in err_msg
+    assert "aurora-0.25-finetuned.ckpt" in err_msg
+    assert "ERA5 reanalysis" in err_msg
+
+
+def test_require_full_model_true_with_small_model_aborts(
+    baseline_raw_dict: dict[str, Any],
+) -> None:
+    """Production launch with require_full_model: true and model_type: small must abort."""
+    baseline_raw_dict["training"]["require_full_model"] = True
+    baseline_raw_dict["model"]["model_type"] = "small"
+    with pytest.raises(ValidationError) as exc_info:
+        Config.model_validate(baseline_raw_dict)
+    err_msg = str(exc_info.value)
+    assert "training.require_full_model is true, but model_type resolved to 'small'" in err_msg
+    assert "Production launches must use the 1.3B model ('full')" in err_msg
+
+
+def test_smoke_test_patching_forces_small_and_overrides_require_full_model(
+    config_path: Path,
+) -> None:
+    """--smoke-test forces model_type: small and require_full_model: false."""
+    from aurora_mjo.cli_support import _patch_config_for_smoke_test
+
+    cfg = load_config(config_path, mode="baseline")
+    assert cfg.model.model_type == "full"
+    assert cfg.training.require_full_model is True
+
+    raw_dict = cfg.to_dict()
+    patched = _patch_config_for_smoke_test(raw_dict)
+    assert patched["model"]["model_type"] == "small"
+    assert patched["training"]["require_full_model"] is False
+
+    # Validates without aborting cross-section rules
+    from aurora_mjo.config import ModelConfig, TrainingConfig
+
+    m_cfg = ModelConfig.model_validate(patched["model"])
+    t_cfg = TrainingConfig.model_validate(patched["training"])
+    assert m_cfg.model_type == "small"
+    assert t_cfg.require_full_model is False

@@ -23,7 +23,7 @@ randomly initialized and silently absent from the pretrained checkpoint.
 """
 
 import torch
-from aurora import Aurora, AuroraSmallPretrained
+from aurora import AuroraPretrained, AuroraSmallPretrained
 from aurora.batch import Batch
 from aurora.model.lora import LoRA, LoRARollout
 from aurora.normalisation import locations, scales
@@ -137,7 +137,7 @@ class AuroraMJO(nn.Module):
     Config keys recognised
     ----------------------
     model_type : str
-        ``'huge'`` -> ``Aurora``, anything else -> ``AuroraSmallPretrained``.
+        ``'full'`` -> ``AuroraPretrained``, anything else -> ``AuroraSmallPretrained``.
     surface_variables : list[str]
         Which surface variables to pass.
     use_lora : bool
@@ -153,7 +153,7 @@ class AuroraMJO(nn.Module):
 
     def __init__(
         self,
-        backbone: Aurora,
+        backbone: AuroraPretrained | AuroraSmallPretrained,
         mjo_head: MJOHead | None = None,
     ) -> None:
         super().__init__()
@@ -259,7 +259,7 @@ def _is_lora_param(name: str, module: nn.Module) -> bool:
 
 
 def freeze_backbone(
-    backbone: Aurora,
+    backbone: AuroraPretrained | AuroraSmallPretrained,
     new_surf_vars: tuple[str, ...],
     use_lora: bool,
 ) -> None:
@@ -421,7 +421,7 @@ def load_model(config: dict, norm_stats: dict | None = None) -> AuroraMJO:
     print(f"Initializing Aurora model. Type: {config['model_type']}")
 
     extended_surf_vars = tuple(config["surface_variables"])
-    model_class = Aurora if config["model_type"] == "huge" else AuroraSmallPretrained
+    model_class = AuroraPretrained if config["model_type"] == "full" else AuroraSmallPretrained
 
     backbone = model_class(
         surf_vars=extended_surf_vars,
@@ -473,7 +473,7 @@ def load_model(config: dict, norm_stats: dict | None = None) -> AuroraMJO:
     if head_cfg.get("enabled", False):
         # embed_dim differs by model size:
         #   AuroraSmallPretrained -> 256
-        #   Aurora (huge)         -> 512
+        #   AuroraPretrained (full) -> 512
         embed_dim = backbone.encoder.embed_dim
         mjo_head = MJOHead(
             embed_dim=embed_dim,
@@ -492,6 +492,14 @@ def load_model(config: dict, norm_stats: dict | None = None) -> AuroraMJO:
         print("MJO head disabled  (set config['mjo_head']['enabled']=True to activate)")
 
     model = AuroraMJO(backbone=backbone, mjo_head=mjo_head)
+    model.model_type = config["model_type"]
+    model.checkpoint_name = getattr(backbone, "default_checkpoint_name", "unknown")
+    try:
+        import importlib.metadata
+
+        model.aurora_version = importlib.metadata.version("microsoft-aurora")
+    except Exception:
+        model.aurora_version = "unknown"
 
     # ------------------------------------------------------------------
     # Trainable parameter audit

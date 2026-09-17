@@ -167,6 +167,17 @@ class ModelConfig(BaseConfigModel):
     freeze_backbone: bool = True
     mjo_head: MJOHeadConfig = Field(default_factory=MJOHeadConfig)
 
+    @field_validator("model_type")
+    @classmethod
+    def check_model_type(cls, v: str) -> str:
+        if v == "huge":
+            raise ValueError(
+                "model_type 'huge' is retired; use 'full' instead. 'huge' pointed at "
+                "aurora-0.25-finetuned.ckpt (the IFS HRES operational analysis fine-tune), "
+                "which is a different input distribution from ERA5 reanalysis."
+            )
+        return v
+
     @field_validator("gradient_checkpointing")
     @classmethod
     def check_gradient_checkpointing(cls, v: bool) -> bool:
@@ -284,6 +295,7 @@ class RolloutConfig(BaseConfigModel):
 class TrainingConfig(BaseConfigModel):
     """Training run loop, AMP, and step pacing."""
 
+    require_full_model: bool = False
     epochs: int = 3
     target_effective_batch: int = 8
     grad_accum_steps: int = 2
@@ -335,6 +347,12 @@ class Config(BaseConfigModel):
             raise ValueError(
                 "mjo_head.enabled: false with loss.mjo_head.enabled: true: "
                 "a loss term scoring a head that does not exist"
+            )
+        if self.training.require_full_model and self.model.model_type == "small":
+            raise ValueError(
+                "training.require_full_model is true, but model_type resolved to 'small'. "
+                "Production launches must use the 1.3B model ('full') to prevent running "
+                "the debug model."
             )
         return self
 

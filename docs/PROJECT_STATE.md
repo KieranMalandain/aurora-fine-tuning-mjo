@@ -1,15 +1,15 @@
 # Living Project State
 
 **Last Updated:** 2026-09-17  
-**Active Phase:** Campaign `science-baseline` underway (Task G1 implemented); preparing for Task G2 (`model_type: full` model scale).  
+**Active Phase:** Campaign `science-baseline` underway (Tasks G1 & G2 implemented); preparing for Task G3 (True Normalisation Statistics).  
 
 ---
 
 ## 1. Next Action
 
-> **Implement Task G2 (`model_type: full` model scale): configure production modes to instantiate `AuroraPretrained` (1.3B Swin3D backbone), run IMA matrix probe, benchmark memory/throughput at 1°, and ensure debug/smoke tests fall back to `AuroraSmallPretrained`.**
+> **Implement Task G3 (True Normalisation Statistics): run `scripts/calc_norm_stats.py` over training years 1980–2015 on 1° ERA5 archive; replace placeholder constants for `msl`, `ttr`, and `tcwv` in `configs/unified.yaml`.**
 
-**Justification:** Task G1 successfully eliminated the 16× spatial upsampling overhead, enabling the full 1.3B model to fit comfortably within the 80 GB A100 budget without illegal memory access crashes.
+**Justification:** Tasks G1 (1° native resolution) and G2 (1.3B model scale verified at 14.69 GiB peak memory, 221 ms/step) have established the full-scale computational foundation. G3 will eliminate the uncalibrated normalisation placeholders before training.
 
 *Campaign Synthesis & Next Steps:* See [`docs/campaigns/science-baseline/README.md`](campaigns/science-baseline/README.md) for full campaign plan and execution roadmap.
 
@@ -19,14 +19,15 @@
 
 | Component / Subsystem | Status | Evidence / Reference | Notes |
 | :--- | :--- | :--- | :--- |
+| **Model Scale (1.3B Backbone)** | **GREEN** | Task G2 (`model.py`, `config.py`, `cli_support.py`) | `model_type: full` selects `AuroraPretrained` (1.26B total params); `small` (`AuroraSmallPretrained`) confined to smoke/CI; `huge` retired; production enforces `require_full_model: true`; 1° peak memory 14.69 GiB (81.6% free VRAM), step time 221 ms; Lesson 6 constraint dissolved. |
 | **Native Resolution Ingestion** | **GREEN** | Task G1 (`src/aurora_mjo/dataset.py`, `trainer.py`) | Both upsamplers deleted; 1° grid coordinates dynamically loaded from CFS archive; slt regridded to 1° (`data/static/slt_1deg.nc`); forward pass finite. |
 | **Package Structure** | **GREEN** | Task C1 (`src/aurora_mjo/`) | First-party package installed via Hatchling; third-party `aurora` collision resolved. |
 | **Dependency Management** | **GREEN** | Task A1 (`pyproject.toml`, `uv.lock`) | `uv` is the sole manager; PyTorch 2.5.1+cu121 links correctly with CUDA on Perlmutter. |
-| **Verification Gate** | **GREEN** | Task A3 / G1 (`scripts/check.py`) | Stdlib runner checking lockfile, ruff lint/format, pyrefly types, and pytest (all PASS). |
+| **Verification Gate** | **GREEN** | Task A3 / G1 / G2 (`scripts/check.py`) | Stdlib runner checking lockfile, ruff lint/format, pyrefly types, and pytest (all PASS). |
 | **Type Checking Ratchet** | **GREEN** | Task A3 / `pyproject.toml` | `pyrefly 1.2.0` active. Ratchet exclusion list holds 8 entries; entries come off, never on. |
-| **Test Suite Coverage** | **GREEN** | Tasks D1–D3, E1–E2, G1 | **84 passed**, **1 xfailed**, **7 deselected** (needs data/gpu/slow) on default CI path; **5 passed** on `needs_data`. |
+| **Test Suite Coverage** | **GREEN** | Tasks D1–D3, E1–E2, G1, G2 | **88 passed**, **1 xfailed**, **8 deselected** (needs data/gpu/slow) on default CI path; **5 passed** on `needs_data`; **3 passed** on `needs_gpu`. |
 | **Environment Guards** | **GREEN** | Task E1 (`src/aurora_mjo/env.py`) | `HDF5_USE_FILE_LOCKING=FALSE` auto-set; zero-fallbacks replaced with `StaticVarLoadError`. |
-| **Config Validation** | **GREEN** | Task E2 (`src/aurora_mjo/config.py`) | Pydantic v2 boundary validation with `extra="forbid"`; 9 validity rules enforced; `unified.yaml` free of `/pscratch`. |
+| **Config Validation** | **GREEN** | Task E2 / G2 (`src/aurora_mjo/config.py`) | Pydantic v2 boundary validation; rejects `model_type: huge` with rationale; enforces `require_full_model`. |
 | **RMM Core Extraction** | **GREEN** | Task C3 (`src/aurora_mjo/rmm/`) | Pure math extracted into `compute.py` and `evaluate.py`; scripts serve as thin CLI. |
 | **SLURM Automation** | **GREEN** | Task E3 (`slurm_scripts/`) | All scripts unified under `uv run --frozen`; `env.sh` extracted; signal traps preserved. |
 | **July 2026 Run Forensics** | **RESOLVED** | Task B2 / [`docs/findings/2026-09-zeroed-statics.md`](findings/2026-09-zeroed-statics.md) | Logs purged on scratch, but structural proof shows past runs did not run on zero statics. |
@@ -41,12 +42,12 @@ Measured locally via `uv run pytest --collect-only`:
 
 | Category / Marker | Count | Execution Context | Verified In Tasks |
 | :--- | :--- | :--- | :--- |
-| **Default CI Path** (offline, synthetic CPU) | **85** (84 pass, 1 xfail) | Local dev, GitHub Actions (`ubuntu-latest`) | A3, D1, D2, D3, E1, E2, G1 |
+| **Default CI Path** (offline, synthetic CPU) | **89** (88 pass, 1 xfail) | Local dev, GitHub Actions (`ubuntu-latest`) | A3, D1–D3, E1–E2, G1, G2 |
 | **`needs_data`** (requires CFS archive) | 5 | NERSC Perlmutter login / compute node | D2, D3, E1, G1 |
-| **`needs_gpu`** (requires CUDA device) | 2 | NERSC Perlmutter GPU compute node | D2 |
+| **`needs_gpu`** (requires CUDA device) | 3 | NERSC Perlmutter GPU compute node | D2, G2 |
 | **`slow`** (rollout simulation > 5s) | 1 | NERSC Perlmutter GPU compute node | D2 |
 | **`live`** (external network / HF Hub) | 0 | N/A (all offline) | D2 |
-| **Total Test Suite** | **92** | Full suite passes across environments | F1, G1 |
+| **Total Test Suite** | **96** | Full suite passes across environments | F1, G1, G2 |
 
 *Note: The single `xfail` test (`tests/test_norm_stats.py::test_placeholder_stats_warning_or_failure`) tracks the open requirement to replace the `msl` placeholder constants.*
 
@@ -56,13 +57,13 @@ Measured locally via `uv run pytest --collect-only`:
 
 - [ ] **Compute True Normalisation Statistics (OPEN-01):** Run `scripts/calc_norm_stats.py` over training years 1980–2015 on Perlmutter; update `configs/unified.yaml` and resolve `test_placeholder_stats_warning_or_failure` (Task G3).
 - [x] **Relocate `slt_data.nc` (Q-07 / Q-17):** Regridded categorical soil type to 1° via nearest neighbour; saved and committed to `data/static/slt_1deg.nc` (~19.6 kB); removed purgeable scratch dependency; updated `configs/unified.yaml`.
+- [x] **Model Scale Benchmark (Task G2):** Mapped `model_type: full` to `AuroraPretrained` (1.3B Swin3D backbone); retired `huge`; measured exact parameter counts (1,256,365,744 base); measured peak memory (14.69 GiB) and step time (221 ms) at 1°; Lesson 6 constraint dissolved.
 - [ ] **Enable GitHub Branch Protection (Human Action):** Configure GitHub repository rulesets for `main` requiring pull requests and `scripts/check.py` CI status check approval.
 - [ ] **Address Config Immutability Wart (Observation from E2):** Refactor `cli_support.py:auto_scale_memory` to remove post-validation dictionary mutation.
 - [ ] **Scientific Campaign: Rollout & Loss Dynamics:**
   - *Finding 3:* Clamp fed-back predictions in autoregressive rollouts before feeding into subsequent input windows.
   - *Finding 5:* Resolve parameter freezing in physics-informed mode so moisture-budget loss can update relevant decoders.
   - *Finding 6:* Unfreeze or recalibrate `msl` output head so predicted fields match physical surface pressure scales.
-  - *Model Scale (Task G2):* Conduct formal throughput/memory scaling benchmarks on 1.3B full Aurora vs. small variant.
 
 ---
 
@@ -84,3 +85,4 @@ Measured locally via `uv run pytest --collect-only`:
 | **Per-phase YAML Configs** | `configs/unified.yaml` with `--mode` | Multiple divergent files caused configuration drift and broken references. |
 | **`train.py` Entry Point** | `run.py train` (shim preserved) | Thin CLI consolidation under Typer with validated boundary config. |
 | **Broad `try...except` Statics** | `StaticVarLoadError` hard failure | Silent zero-substitutions masked missing data and filesystem errors. |
+| **`model_type: huge`** | `model_type: full` (`AuroraPretrained`) | `huge` referenced HRES-analysis fine-tune; `full` loads ERA5-pretrained 1.3B Swin3D backbone. |
