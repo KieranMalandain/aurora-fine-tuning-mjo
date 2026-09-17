@@ -25,7 +25,7 @@ experiment:
 data:
   use_dummy: false
   root: /global/cfs/cdirs/m4946/xiaoming/zm4946.MachLearn/PrcsPrep/prcs.ERA5/prcs.ERA5.Remap/Results
-  slt_path: /pscratch/sd/k/kam352/Aurora/slt/slt_data.nc
+  slt_path: data/static/slt_1deg.nc
   dummy:
     surface_files: []
     pressure_files: []

@@ -73,16 +73,17 @@ exists). First sample init time for 1980 is still `1980-01-01 06:00:00`.
 crops back (`aurora/model/swin3d.py:350`). This is expected and was confirmed by
 forward pass. An agent who sees padding in a profile has not found a bug.
 
-### 2.1 The archive grid convention — **must be read, not assumed**
+### 2.1 The archive grid convention — **measured in G1**
 
-The LANL remap is `180x360MODIS`. Whether its latitudes are cell-centred
-(89.5 … −89.5) or pole-inclusive-minus-one is **not recorded anywhere in this
-repo** and the review could not check it without CFS access. Both work — Aurora
-crops 181→180 and accepts 180 directly (**MEASURED**, R5) — but the *values* go
-into Aurora's position encoding and into every latitude weight in the loss.
+Measured from the CFS archive reference files across all eleven variables and invariants (`remap_180x360MODIS`):
 
-**G1 reads them from the NetCDF and records them in its result file.** No agent
-writes a `linspace` for this. Raised as **Q-16**.
+- **Latitudes**: Cell-centred, 180 points from -89.5 to 89.5 with 1.0° regular spacing.
+  - Raw archive file array (ascending): `[-89.5, -88.5, -87.5, -86.5, -85.5]` ... `[85.5, 86.5, 87.5, 88.5, 89.5]`.
+  - Inverted for Aurora / physical North-to-South alignment (descending, `lat[1:] - lat[:-1] < 0`): `[89.5, 88.5, 87.5, 86.5, 85.5]` ... `[-85.5, -86.5, -87.5, -88.5, -89.5]`.
+- **Longitudes**: Cell-centred, 360 points from 0.5 to 359.5 with 1.0° regular spacing.
+  - Raw archive file array (ascending): `[0.5, 1.5, 2.5, 3.5, 4.5]` ... `[355.5, 356.5, 357.5, 358.5, 359.5]`.
+- **Agreement**: All eleven variables match across all coordinates to float32 exactness.
+- **Orientation**: Aurora's `Metadata` strictly enforces decreasing latitude, and Aurora expects North at row 0. `dataset.py` inverts `lat` to descending and flips data arrays along the latitude dimension (`axis=-2`).
 
 ---
 

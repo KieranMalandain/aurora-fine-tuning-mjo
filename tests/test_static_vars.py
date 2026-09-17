@@ -57,9 +57,9 @@ def test_hdf5_file_locking_env_var_set() -> None:
 def test_static_vars_load_correct_shapes_and_finite(
     synthetic_dataset: LANLMJODataset,
 ) -> None:
-    """Verify static variables load with shape (720, 1440) and finite values."""
+    """Verify static variables load with shape (18, 36) and finite values."""
     statics = synthetic_dataset.static_vars
-    expected_shape = (720, 1440)
+    expected_shape = (18, 36)
 
     for name in ("z", "lsm", "slt"):
         assert name in statics, f"Missing static variable '{name}'"
@@ -68,16 +68,15 @@ def test_static_vars_load_correct_shapes_and_finite(
         assert torch.isfinite(tensor).all(), f"Static '{name}' contains non-finite values"
 
 
-def test_slt_truncate_not_upsample_asymmetry(synthetic_root: Path, synthetic_slt: Path) -> None:
-    """Assert the structural asymmetry between z/lsm (upsampled) and slt (truncated).
+def test_static_vars_native_resolution_symmetry(synthetic_root: Path, synthetic_slt: Path) -> None:
+    """Assert all three static variables share native resolution without upsampling or truncation.
 
-    03_DOMAIN_PRIORS.md §3 notes:
-      - `z` and `lsm` arrive from CFS at native 1° (18x36 in synthetic fixture,
-        180x360 in real archive) and are bilinearly upsampled to (720, 1440) by
-        `_upsample_to_aurora`.
-      - `slt` arrives from an external non-archive file already at 0.25° (720, 1440)
-        and is truncated with `[:720, :]` rather than interpolated.
-    This test guards against well-meaning refactors that attempt to 'unify' the pipeline.
+    Under native resolution ingestion (G1):
+      - `z` and `lsm` arrive at native resolution (18, 36 in synthetic fixture)
+        and are loaded directly without interpolation.
+      - `slt` arrives pre-regridded to native resolution (18, 36 in synthetic fixture)
+        and is loaded directly without truncation.
+      - All three static variables match in spatial dimensions (H, W).
     """
     inv_dir = synthetic_root / "Step00/ERA5.invariant"
     z_file = next(inv_dir.glob("*_z.*.nc"))
@@ -89,9 +88,9 @@ def test_slt_truncate_not_upsample_asymmetry(synthetic_root: Path, synthetic_slt
     with xr.open_dataset(str(lsm_file), engine="netcdf4") as ds_lsm:
         assert ds_lsm["LSM"].shape[-2:] == (18, 36)
     with xr.open_dataset(str(synthetic_slt), engine="netcdf4") as ds_slt:
-        assert ds_slt["slt"].shape[-2:] == (720, 1440)
+        assert ds_slt["slt"].shape[-2:] == (18, 36)
 
-    # 2. Verify dataset instance loads both into identical (720, 1440) Aurora grids
+    # 2. Verify dataset instance loads all three into identical native grids
     ds = LANLMJODataset(
         start_year=1980,
         end_year=1980,
@@ -99,9 +98,9 @@ def test_slt_truncate_not_upsample_asymmetry(synthetic_root: Path, synthetic_slt
         slt_path=synthetic_slt,
         max_rollout_steps=1,
     )
-    assert ds.static_vars["z"].shape == (720, 1440)
-    assert ds.static_vars["lsm"].shape == (720, 1440)
-    assert ds.static_vars["slt"].shape == (720, 1440)
+    assert ds.static_vars["z"].shape == (18, 36)
+    assert ds.static_vars["lsm"].shape == (18, 36)
+    assert ds.static_vars["slt"].shape == (18, 36)
 
 
 def test_clean_zeroes_nan_and_inf_across_all_three_statics(
@@ -259,13 +258,16 @@ def test_real_cfs_static_vars_load_correctly() -> None:
     """Assert all three static variables load correctly from real CFS archive without error."""
     if not REAL_CFS_ROOT.exists():
         pytest.skip(f"Real CFS archive not mounted at {REAL_CFS_ROOT}")
+    slt_path = Path("data/static/slt_1deg.nc")
+    if not slt_path.exists():
+        pytest.skip(f"Native SLT file not found at {slt_path}")
     ds = object.__new__(LANLMJODataset)
     ds.root_dir = REAL_CFS_ROOT
-    ds.slt_path = Path("/pscratch/sd/k/kam352/Aurora/slt/slt_data.nc")
+    ds.slt_path = slt_path
     statics = ds._load_static_vars()
-    assert statics["z"].shape == (720, 1440)
-    assert statics["lsm"].shape == (720, 1440)
-    assert statics["slt"].shape == (720, 1440)
+    assert statics["z"].shape == (180, 360)
+    assert statics["lsm"].shape == (180, 360)
+    assert statics["slt"].shape == (180, 360)
     assert torch.isfinite(statics["z"]).all()
     assert torch.isfinite(statics["lsm"]).all()
     assert torch.isfinite(statics["slt"]).all()

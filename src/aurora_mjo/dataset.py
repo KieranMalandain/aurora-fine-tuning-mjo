@@ -38,9 +38,8 @@
 # plain-Python index structures are stored on `self`; every __getitem__
 # opens, reads, and closes NetCDF files fresh.  Safe for any num_workers.
 #
-# GPU upsampling (unchanged): data is returned at native 1deg (180x360); the
-# trainer upsamples to 0.25def (720x1440) on GPU.  Static vars are upsampled
-# here once.
+# Native 1° ingestion (G1): data and static variables are returned at native
+# 1deg (180x360). Both upsamplers are retired.
 
 import warnings
 from datetime import datetime
@@ -48,7 +47,6 @@ from pathlib import Path
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 import xarray as xr
 from aurora import Batch, Metadata
 from torch.utils.data import Dataset
@@ -80,23 +78,7 @@ ATMOS_VAR_MAP = {
 }
 
 STEP_HOURS = 6  # dataset cadence; must match Aurora's 6 h step
-
-
-def _upsample_to_aurora(tensor):
-    """Upsample 1deg (180x360) to Aurora 0.25deg (720x1440). Used for statics only."""
-    original_shape = tensor.shape
-    if len(original_shape) == 2:
-        tensor = tensor.unsqueeze(0).unsqueeze(0)
-    elif len(original_shape) == 3:
-        tensor = tensor.unsqueeze(0)
-    upsampled = F.interpolate(
-        tensor, size=(720, 1440), mode="bilinear", align_corners=False
-    )
-    if len(original_shape) == 2:
-        return upsampled.squeeze(0).squeeze(0)
-    elif len(original_shape) == 3:
-        return upsampled.squeeze(0)
-    return upsampled
+_DEFAULT_SLT_PATH = Path(__file__).resolve().parents[2] / "data/static/slt_1deg.nc"
 
 
 def _to_seconds_i64(times) -> np.ndarray:
@@ -136,9 +118,10 @@ class LANLMJODataset(Dataset):
 
         if slt_path is None:
             warnings.warn(
-                "slt_path not provided; falling back to default.", stacklevel=2
+                f"slt_path not provided; falling back to default { _DEFAULT_SLT_PATH }.",
+                stacklevel=2,
             )
-            slt_path = "/pscratch/sd/k/kam352/Aurora/slt/slt_data.nc"
+            slt_path = _DEFAULT_SLT_PATH
         self.slt_path = Path(slt_path)
 
         self.start_year = start_year
@@ -148,11 +131,6 @@ class LANLMJODataset(Dataset):
         print(
             f"Initializing LANL MJO Dataset ({start_year}-{end_year}) [timestamp-aligned v3]..."
         )
-
-        # Aurora metadata coordinates are at the UPSAMPLED 0.25° resolution.
-        self.lat = torch.linspace(90, -90, 720)
-        self.lon = torch.linspace(0, 360, 1441)[:-1]
-        self.atmos_levels = tuple(AURORA_PLEVS)
 
         # Hard year-range bounds in unix seconds — enforced on timestamps,
         # NOT on file names.  This is what closes the 2016-leakage hole.
@@ -167,12 +145,16 @@ class LANLMJODataset(Dataset):
             .astype(np.int64)
         )
 
-        # 1. Static variables (small, loaded once, fork-safe tensors)
-        self.static_vars = self._load_static_vars()
-
-        # 2. Per-variable file lists
+        # 1. Per-variable file lists (collected first for coordinate probe)
         self.surf_file_map = self._collect_var_files(SURFACE_VAR_MAP)
         self.atmos_file_map = self._collect_var_files(ATMOS_VAR_MAP)
+
+        # 2. Native coordinates read from archive reference file (no hard-coded linspace)
+        self.lat, self.lon, self._flip_lat = self._load_grid_coordinates()
+        self.atmos_levels = tuple(AURORA_PLEVS)
+
+        # 3. Static variables (small, loaded once, fork-safe tensors)
+        self.static_vars = self._load_static_vars()
 
         # 3. Per-variable {ts_seconds -> (file_idx, local_idx)} maps +
         #    intersection timeline + contiguity-checked sample starts.
@@ -325,16 +307,70 @@ class LANLMJODataset(Dataset):
                 return []
         return [int(np.argmin(np.abs(all_levs - p))) for p in AURORA_PLEVS]
 
+    def _load_grid_coordinates(self) -> tuple[torch.Tensor, torch.Tensor, bool]:
+        """Load native grid coordinates from an archive reference NetCDF file.
+
+        Enforces Aurora's convention: latitudes must be strictly decreasing.
+        If the archive stores latitudes ascending (e.g. -89.5 to 89.5 as in
+        the LANL 180x360 remap), we invert them to descending (89.5 to -89.5)
+        and record _flip_lat=True so that spatial slices are flipped along
+        the latitude dimension (axis=-2) to keep physical orientation intact.
+        """
+        ref_file: Path | None = None
+        static_dir = self.root_dir / "Step00/ERA5.invariant"
+        z_files = list(static_dir.glob("*_z.*.nc")) if static_dir.exists() else []
+        if z_files:
+            ref_file = z_files[0]
+        else:
+            for _, (files, _) in self.surf_file_map.items():
+                if files:
+                    ref_file = Path(files[0])
+                    break
+
+        if ref_file is None:
+            raise FileNotFoundError(
+                f"No reference NetCDF file found in {self.root_dir} to read coordinates."
+            )
+
+        with xr.open_dataset(str(ref_file), engine="netcdf4") as ds:
+            lat_k = "lat" if "lat" in ds.coords else "latitude"
+            lon_k = "lon" if "lon" in ds.coords else "longitude"
+            if lat_k not in ds.coords or lon_k not in ds.coords:
+                raise KeyError(
+                    f"Coordinate '{lat_k}' or '{lon_k}' not found in {ref_file}"
+                )
+            raw_lat = ds[lat_k].values.astype(np.float32)
+            raw_lon = ds[lon_k].values.astype(np.float32)
+
+        flip_lat = False
+        if raw_lat[0] < raw_lat[-1]:
+            # Archive stores latitudes ascending (South to North). Invert to descending.
+            lat = raw_lat[::-1].copy()
+            flip_lat = True
+        else:
+            lat = raw_lat.copy()
+
+        lat_t = torch.from_numpy(lat)
+        lon_t = torch.from_numpy(raw_lon.copy())
+
+        # Validate strictly decreasing latitude and strictly increasing longitude
+        if not torch.all(lat_t[1:] - lat_t[:-1] < 0):
+            raise ValueError("Latitudes must be strictly decreasing.")
+        if not torch.all(lon_t[1:] - lon_t[:-1] > 0):
+            raise ValueError("Longitudes must be strictly increasing.")
+
+        return lat_t, lon_t, flip_lat
+
     def _load_static_vars(self):
-        """Z, LSM, SLT as pure tensors, upsampled to 0.25deg.
+        """Load native invariant and static fields into memory.
+
+        Static variables are small (180x360 at 1deg) and time-invariant, so we
+        read them once at __init__ and reuse them in every sample.
 
         v3: NaN/Inf are zeroed for ALL three statics (previously only slt was sanitized).
         E1: Invariant and static variable loads fail loudly with StaticVarLoadError
-        rather than substituting zero tensors on exception. Earlier versions caught
-        Exception and substituted all-zeros with a UserWarning, risking silent physics
-        degradation (a planet with no topography and no continents, emitting only two
-        warnings in an 11-hour log). docs/findings/2026-09-zeroed-statics.md (task B2)
-        records whether this fallback ever fired in production.
+        rather than substituting zero tensors on exception.
+        G1: Statics are loaded at native 1° without upsampling or [:720, :] truncation.
         """
         static_dir = self.root_dir / "Step00/ERA5.invariant"
 
@@ -357,7 +393,9 @@ class LANLMJODataset(Dataset):
         try:
             with xr.open_dataset(z_path, engine="netcdf4") as ds_z:
                 z_arr = ds_z["Z"].values
-            z_tensor = _upsample_to_aurora(_clean(torch.from_numpy(z_arr).float()))
+            if getattr(self, "_flip_lat", False):
+                z_arr = np.flip(z_arr, axis=-2)
+            z_tensor = _clean(torch.from_numpy(z_arr.copy()).float())
         except Exception as e:
             msg = (
                 f"Failed to load invariant variable 'z' from {z_path}: {e}. "
@@ -371,7 +409,9 @@ class LANLMJODataset(Dataset):
         try:
             with xr.open_dataset(lsm_path, engine="netcdf4") as ds_lsm:
                 lsm_arr = ds_lsm["LSM"].values
-            lsm_tensor = _upsample_to_aurora(_clean(torch.from_numpy(lsm_arr).float()))
+            if getattr(self, "_flip_lat", False):
+                lsm_arr = np.flip(lsm_arr, axis=-2)
+            lsm_tensor = _clean(torch.from_numpy(lsm_arr.copy()).float())
         except Exception as e:
             msg = (
                 f"Failed to load invariant variable 'lsm' from {lsm_path}: {e}. "
@@ -384,8 +424,17 @@ class LANLMJODataset(Dataset):
         try:
             with xr.open_dataset(self.slt_path, engine="netcdf4") as ds_slt:
                 slt_arr = ds_slt["slt"].values
-            slt_tensor = _clean(torch.from_numpy(slt_arr).float())
-            slt_tensor = _ensure_2d(slt_tensor)[:720, :]
+                lat_k = (
+                    "lat"
+                    if "lat" in ds_slt.coords
+                    else ("latitude" if "latitude" in ds_slt.coords else None)
+                )
+                if lat_k is not None:
+                    slt_lat = ds_slt[lat_k].values
+                    if len(slt_lat) > 1 and slt_lat[0] < slt_lat[-1]:
+                        slt_arr = np.flip(slt_arr, axis=-2)
+            slt_tensor = _clean(torch.from_numpy(slt_arr.copy()).float())
+            slt_tensor = _ensure_2d(slt_tensor)
         except Exception as e:
             msg = (
                 f"Failed to load static soil type 'slt' from {self.slt_path}: {e}. "
@@ -418,6 +467,8 @@ class LANLMJODataset(Dataset):
             fi, li = ts_map[s]  # guaranteed present: timeline ⊆ every var's map
             with xr.open_dataset(str(files[fi]), engine="netcdf4") as ds:
                 arr = ds[native_name].isel(time=li).values
+            if self._flip_lat:
+                arr = np.flip(arr, axis=-2)
             arrays.append(arr)
         return np.stack(arrays, axis=0).astype(np.float32)
 

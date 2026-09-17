@@ -38,6 +38,8 @@ data_local/
 *.nc
 # tests/fixtures/*.nc ARE committed — they are small and synthetic. See D1.
 !tests/fixtures/**
+# data/static/*.nc ARE committed — static 1deg fields (e.g. slt_1deg.nc). See G1.
+!data/static/**
 
 # Checkpoints
 checkpoints/

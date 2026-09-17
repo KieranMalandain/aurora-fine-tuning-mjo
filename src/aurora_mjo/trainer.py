@@ -53,7 +53,6 @@ from pathlib import Path
 
 import torch
 import torch.distributed as dist
-import torch.nn.functional as F
 from torch import nn
 from torch.utils.data import DataLoader, DistributedSampler, Subset
 
@@ -152,57 +151,6 @@ def _align_shapes(pred_t, tgt_t):
     return pred_t, tgt_t
 
 
-def _upsample_batch_gpu(in_batch, surf_targets_list, atmos_targets_list, device):
-    """Upsample a 1deg batch + targets to 0.25deg (720x1440) on GPU."""
-    from aurora import Batch
-
-    TARGET_SIZE = (720, 1440)
-
-    def _up(t):
-        orig = t.shape
-        if orig[-2:] == TARGET_SIZE:
-            return t
-        if t.ndim == 2:
-            t = t.unsqueeze(0).unsqueeze(0)
-        elif t.ndim == 3:
-            t = t.unsqueeze(0)
-        elif t.ndim == 5:
-            B, T, C, H, W = t.shape
-            t = t.reshape(B * T, C, H, W)
-        elif t.ndim == 4:
-            pass
-        else:
-            return t
-        t = F.interpolate(t, size=TARGET_SIZE, mode="bilinear", align_corners=False)
-        if len(orig) == 2:
-            return t.squeeze(0).squeeze(0)
-        elif len(orig) == 3:
-            return t.squeeze(0)
-        elif len(orig) == 5:
-            return t.reshape(orig[0], orig[1], orig[2], *TARGET_SIZE)
-        return t
-
-    new_surf = {k: _up(v.to(device)) for k, v in in_batch.surf_vars.items()}
-    new_atmos = {k: _up(v.to(device)) for k, v in in_batch.atmos_vars.items()}
-    new_static = {k: v.to(device) for k, v in in_batch.static_vars.items()}
-
-    up_batch = Batch(
-        surf_vars=new_surf,
-        atmos_vars=new_atmos,
-        static_vars=new_static,
-        metadata=in_batch.metadata,
-    )
-
-    target_dict_list = []
-    for surf_targets, atmos_targets in zip(surf_targets_list, atmos_targets_list):
-        target_dict = {}
-        for k, v in surf_targets.items():
-            target_dict[k] = _up(v.to(device))
-        for k, v in atmos_targets.items():
-            target_dict[k] = _up(v.to(device))
-        target_dict_list.append(target_dict)
-
-    return up_batch, target_dict_list
 
 
 # FIX 4 (AURORA_MJO_GAMEPLAN §Finding 3 / FIX 4, phase-3 LoRA rollout only):
@@ -895,15 +843,9 @@ class Trainer:
             if isinstance(surf_out_list, dict):
                 surf_out_list = [surf_out_list]
                 atmos_out_list = [atmos_out_list]
-            needs_upsample = next(iter(surf_out_list[0].values())).shape[-1] < 1440
-            if needs_upsample:
-                in_batch, target_dict_list = _upsample_batch_gpu(
-                    in_batch, surf_out_list, atmos_out_list, self.device
-                )
-            else:
-                target_dict_list = [
-                    {**s, **a} for s, a in zip(surf_out_list, atmos_out_list)
-                ]
+            target_dict_list = [
+                {**s, **a} for s, a in zip(surf_out_list, atmos_out_list)
+            ]
         else:
             raise ValueError(f"Unexpected batch tuple length: {len(batch)}")
 

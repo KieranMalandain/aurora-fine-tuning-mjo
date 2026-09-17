@@ -416,18 +416,21 @@ def generate_archive(
 
 
 def generate_slt(slt_path: Path) -> None:
-    """Generate 720x1440 synthetic slt_data.nc matching domain priors."""
+    """Generate synthetic slt_data.nc matching reduced synthetic grid (18x36)."""
     slt_path.parent.mkdir(parents=True, exist_ok=True)
-    lat = np.linspace(90.0, -90.0, 720, dtype=np.float64)
-    lon = np.linspace(0.0, 360.0, 1441, dtype=np.float64)[:-1]
+    grid_lat, grid_lon = make_grid()
+    lat = grid_lat[::-1].copy() if grid_lat[0] < grid_lat[-1] else grid_lat.copy()
+    lon = grid_lon.copy()
+    H = len(lat)
+    W = len(lon)
 
     # Deterministic categorical 0..7 field: ocean (~72%) is 0; land (1..7)
     np.random.seed(42)
-    slt = np.zeros((1, 720, 1440), dtype=np.float32)
-    ocean = np.random.rand(1, 720, 1440) < 0.72
+    slt = np.zeros((1, H, W), dtype=np.float32)
+    ocean = np.random.rand(1, H, W) < 0.72
     land_cats = np.random.choice(
         [1, 2, 3, 4, 5, 6, 7],
-        size=(1, 720, 1440),
+        size=(1, H, W),
         p=[0.35, 0.30, 0.15, 0.10, 0.04, 0.03, 0.03],
     ).astype(np.float32)
     slt[~ocean] = land_cats[~ocean]

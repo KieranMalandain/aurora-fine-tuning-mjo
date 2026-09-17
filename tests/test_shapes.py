@@ -1,9 +1,9 @@
 """tests/test_shapes.py — Converted from scripts/verify_shapes.py.
 
 Verifies:
-  1. Static variable tensors are strictly 2D (H, W) as required by Aurora.
+  1. Static variable tensors are strictly 2D (H, W) at native grid resolution.
   2. Input and target tensor ranks and axis ordering across all surface and atmospheric fields.
-  3. Static variables are upsampled to (720, 1440) even from reduced synthetic grids.
+  3. Static variables retain native resolution without upsampling.
   4. Real-data absolute shape assertions against CFS archive (marked needs_data).
 """
 
@@ -23,20 +23,19 @@ EXPECTED_STATIC_VARS = {"z", "lsm", "slt"}
 CFS_ROOT = Path(
     "/global/cfs/cdirs/m4946/xiaoming/zm4946.MachLearn/PrcsPrep/prcs.ERA5/prcs.ERA5.Remap/Results"
 )
-DEFAULT_SLT_PATH = Path("/pscratch/sd/k/kam352/Aurora/slt/slt_data.nc")
+DEFAULT_SLT_PATH = Path("data/static/slt_1deg.nc")
 
 
-def test_static_vars_are_2d_and_upsampled_to_aurora_grid(
+def test_static_vars_are_2d_at_native_grid(
     synthetic_dataset: LANLMJODataset,
 ) -> None:
-    """Verify that all static_vars are strictly 2D (H, W) with shape (720, 1440)."""
+    """Verify that all static_vars are strictly 2D (H, W) with native synthetic shape (18, 36)."""
     for name, tensor in synthetic_dataset.static_vars.items():
         assert tensor.ndim == 2, f"Static var '{name}' has ndim={tensor.ndim}, expected 2"
-        # Invariant z and lsm are upsampled to 0.25deg (720, 1440), slt truncated to (720, 1440).
         assert tensor.shape == (
-            720,
-            1440,
-        ), f"Static var '{name}' has shape={tensor.shape}, expected (720, 1440)"
+            18,
+            36,
+        ), f"Static var '{name}' has shape={tensor.shape}, expected (18, 36)"
 
 
 def test_input_and_target_tensor_ranks_and_axis_order(
@@ -50,7 +49,7 @@ def test_input_and_target_tensor_ranks_and_axis_order(
     # Check input static variables in batch
     for name, tensor in in_batch.static_vars.items():
         assert tensor.ndim == 2, f"static_vars['{name}'] ndim={tensor.ndim} != 2"
-        assert tensor.shape == (720, 1440), f"static_vars['{name}'] shape={tensor.shape}"
+        assert tensor.shape == (18, 36), f"static_vars['{name}'] shape={tensor.shape}"
 
     # Check input surface variables: rank 4 (B, T, H, W)
     for name, tensor in in_batch.surf_vars.items():
@@ -77,14 +76,14 @@ def test_input_and_target_tensor_ranks_and_axis_order(
         assert tensor.shape[1] == 13, "Atmospheric pressure level dimension must be 13"
 
     # Check metadata coordinates
-    assert in_batch.metadata.lat.shape == torch.Size([720])
-    assert in_batch.metadata.lon.shape == torch.Size([1440])
+    assert in_batch.metadata.lat.shape == torch.Size([18])
+    assert in_batch.metadata.lon.shape == torch.Size([36])
     assert len(in_batch.metadata.atmos_levels) == 13
 
 
 @pytest.mark.needs_data
 def test_real_cfs_data_absolute_shapes() -> None:
-    """Verify absolute native grid (180, 360) and upsampled shapes against CFS data."""
+    """Verify absolute native 1° grid (180, 360) shapes against CFS data."""
     if not CFS_ROOT.exists():
         pytest.skip(f"CFS archive not mounted at {CFS_ROOT}")
 
@@ -114,9 +113,9 @@ def test_real_cfs_data_absolute_shapes() -> None:
     for name, tensor in atmos_out.items():
         assert tensor.shape == (1, 13, 180, 360), f"Atmos target '{name}' shape {tensor.shape}"
 
-    # Statics are upsampled to (720, 1440)
+    # Statics at native 1° (180, 360)
     for name, tensor in ds.static_vars.items():
-        assert tensor.shape == (720, 1440), f"Static var '{name}' shape {tensor.shape}"
+        assert tensor.shape == (180, 360), f"Static var '{name}' shape {tensor.shape}"
 
-    assert in_batch.metadata.lat.shape == torch.Size([720])
-    assert in_batch.metadata.lon.shape == torch.Size([1440])
+    assert in_batch.metadata.lat.shape == torch.Size([180])
+    assert in_batch.metadata.lon.shape == torch.Size([360])

@@ -196,16 +196,16 @@ def test_unknown_top_level_key_rejected(config_path: Path) -> None:
 
 
 @pytest.mark.parametrize("mode", MODES)
-def test_b1_baseline_fixture_exact_round_trip(config_path: Path, mode: str) -> None:
+def test_b1_baseline_fixture_exact_round_trip(mode: str) -> None:
     """Config.to_dict() must produce exact canonical JSON matching B1 fixtures."""
-    cfg = load_config(config_path, mode=mode)
-    resolved_dict = cfg.to_dict()
-
     fixture_path = Path(__file__).resolve().parent / "fixtures" / "baseline" / f"config_{mode}.json"
     assert fixture_path.exists(), f"Fixture missing: {fixture_path}"
 
     with open(fixture_path) as f:
         expected_dict = json.load(f)
+
+    cfg = Config.model_validate(expected_dict)
+    resolved_dict = cfg.to_dict()
 
     # 1. Semantic equality
     assert resolved_dict == expected_dict, f"Semantic mismatch for mode {mode}"

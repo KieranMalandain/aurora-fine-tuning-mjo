@@ -339,10 +339,10 @@ def test_dataset_construction_offline_sample_count(synthetic_dataset: LANLMJODat
     # Timestamp verification
     assert batch.metadata.time[0] == datetime(1980, 1, 1, 6, 0), "Expected first sample at 06:00:00"
 
-    # Static variable shapes (upsampled to 720x1440)
-    assert batch.static_vars["z"].shape == (720, 1440)
-    assert batch.static_vars["lsm"].shape == (720, 1440)
-    assert batch.static_vars["slt"].shape == (720, 1440)
+    # Static variable shapes (native 18x36 in synthetic fixture)
+    assert batch.static_vars["z"].shape == (18, 36)
+    assert batch.static_vars["lsm"].shape == (18, 36)
+    assert batch.static_vars["slt"].shape == (18, 36)
 
     # Dynamic variables at reduced grid (18, 36)
     assert batch.surf_vars["2t"].shape == (1, 2, 18, 36)
