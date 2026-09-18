@@ -1,13 +1,13 @@
 # Living Project State
 
 **Last Updated:** 2026-09-17  
-**Active Phase:** Campaign `science-baseline` Phase H in progress (Task H1 implemented); ready for Tasks H2 (Spectral Loss) / H3 (Moisture Conservation) and Phase J (Evaluation & Ruler).  
+**Active Phase:** Campaign `science-baseline` Phase H in progress (Tasks H1 + H2 implemented); ready for Task H3 (Moisture Conservation) and Phase J (Evaluation & Ruler).  
 
 ---
 
 ## 1. Next Action
 
-> **Implement Task H2 (Spectral Loss) and Task J1 (Wheeler-Hendon RMM Reconstruction): continue parallel Phase H and Phase J tracks.**
+> **Implement Task H3 (Moisture Conservation) and Task J1 (Wheeler-Hendon RMM Reconstruction): continue parallel Phase H and Phase J tracks.**
 
 **Justification:** Task H1 has resolved the primary scientific defect R1 by establishing normalised, area-weighted, level-weighted grid loss with a priori variable importance weighting ($w_v$). Moisture variables (`q`, `tcwv`, `ttr`) now receive balanced backpropagation gradients (matching theoretical shares within 0.01% error). Next actions continue objective refinement (H2/H3) and RMM metric verification (J1).
 
@@ -19,6 +19,7 @@
 
 | Component / Subsystem | Status | Evidence / Reference | Notes |
 | :--- | :--- | :--- | :--- |
+| **Spectral Loss (per-variable, 2-D)** | **GREEN** | Task H2 (`loss.py`, `trainer.py`, `test_loss.py`) | `SpectralLoss` rewritten: `rfft2` over `(lat, lon)` only per variable per level; normalised with G3 constants; `w_v` weights matching H1; Hann latitude window; amplitude-spectrum formulation (`\|FFT(x̂)\| − \|FFT(x)\|`); disabled by default (`enabled: false`); pre-H2 flat-vector defect (R6) documented and corrected. |
 | **Grid Loss Normalisation & Weighting** | **GREEN** | Task H1 (`loss.py`, `trainer.py`, `configs/unified.yaml`, `test_loss.py`) | Normalised using 1980–2015 Welford stats; separate multiplicative area weighting $a(\phi)$ and tropical mask $m(\phi)$; pressure-delta vertical weighting $c_\ell$; config-locked $w_v$ resolving R1 ($msl:q$ gradient ratio changed from 5.8M:1 to 0.25:1); per-variable losses emitted. |
 | **SST Boundary Condition** | **GREEN** | Task G5 (`fetch_sst.py`, `data/static/sst/`, `dataset.py`, `model.py`) | ERA5 daily SST sourced from CDS, regridded to 1.0° cell-centred grid, zonal-mean land fill (worst land point 1.75 σ); Welford population stats (mean 285.5980 K, std 11.7613 K); bitwise identical rollout persistence across 120 steps; trainable encoder embedding (+16,384 params on 1.3B model; 0 decoder heads). |
 | **Physical Sanity Gate (1° Fingerprint)** | **GREEN** | Task G4 (`scripts/verify_dataset_loader.py`, `tests/fixtures/science-baseline/`, `tests/test_physical_ranges.py`) | All 11 dynamic variables + 3 statics verified across 1980, 1998, 2015 against literature ranges; three named traps verified (ttr negative, surface z in m² s⁻², q spanning >3–4 orders of magnitude); G3 normalization sigmas within ±10 σ (bulk in ±5 σ); full 1.3B model forward pass finite on GPU; 99 offline tests passing. |
@@ -27,9 +28,9 @@
 | **Native Resolution Ingestion** | **GREEN** | Task G1 (`src/aurora_mjo/dataset.py`, `trainer.py`) | Both upsamplers deleted; 1° grid coordinates dynamically loaded from CFS archive; slt regridded to 1° (`data/static/slt_1deg.nc`); forward pass finite. |
 | **Package Structure** | **GREEN** | Task C1 (`src/aurora_mjo/`) | First-party package installed via Hatchling; third-party `aurora` collision resolved. |
 | **Dependency Management** | **GREEN** | Task A1 (`pyproject.toml`, `uv.lock`) | `uv` is the sole manager; PyTorch 2.5.1+cu121 links correctly with CUDA on Perlmutter. |
-| **Verification Gate** | **GREEN** | Task A3 / G1 / G2 / G5 / H1 (`scripts/check.py`) | Stdlib runner checking lockfile, ruff lint/format, pyrefly types, and pytest (all PASS). |
+| **Verification Gate** | **GREEN** | Task A3 / G1 / G2 / G5 / H1 / H2 (`scripts/check.py`) | Stdlib runner checking lockfile, ruff lint/format, pyrefly types, and pytest (all PASS). |
 | **Type Checking Ratchet** | **GREEN** | Task A3 / `pyproject.toml` | `pyrefly 1.2.0` active. Ratchet exclusion list holds 8 entries; entries come off, never on. |
-| **Test Suite Coverage** | **GREEN** | Tasks D1–D3, E1–E2, G1–G5, H1 | **110 passed**, **0 xfailed**, **9 deselected** (needs data/gpu/slow) on default CI path; **119 total tests**. |
+| **Test Suite Coverage** | **GREEN** | Tasks D1–D3, E1–E2, G1–G5, H1–H2 | **113 passed**, **0 xfailed**, **9 deselected** (needs data/gpu/slow) on default CI path; **122 total tests**. |
 | **Environment Guards** | **GREEN** | Task E1 (`src/aurora_mjo/env.py`) | `HDF5_USE_FILE_LOCKING=FALSE` auto-set; zero-fallbacks replaced with `StaticVarLoadError`. |
 | **Config Validation** | **GREEN** | Task E2 / G2 / H1 (`src/aurora_mjo/config.py`) | Pydantic v2 boundary validation; validates GridLossConfig fields (`weight`, `level_weighting`, `variable_weights`). |
 | **RMM Core Extraction** | **GREEN** | Task C3 (`src/aurora_mjo/rmm/`) | Pure math extracted into `compute.py` and `evaluate.py`; scripts serve as thin CLI. |
@@ -46,12 +47,12 @@ Measured locally via `uv run pytest --collect-only`:
 
 | Category / Marker | Count | Execution Context | Verified In Tasks |
 | :--- | :--- | :--- | :--- |
-| **Default CI Path** (offline, synthetic CPU) | **110** (110 pass, 0 xfail) | Local dev, GitHub Actions (`ubuntu-latest`) | A3, D1–D3, E1–E2, G1–G5, H1 |
+| **Default CI Path** (offline, synthetic CPU) | **113** (113 pass, 0 xfail) | Local dev, GitHub Actions (`ubuntu-latest`) | A3, D1–D3, E1–E2, G1–G5, H1–H2 |
 | **`needs_data`** (requires CFS archive) | 6 | NERSC Perlmutter login / compute node | D2, D3, E1, G1, G5 |
 | **`needs_gpu`** (requires CUDA device) | 3 | NERSC Perlmutter GPU compute node | D2, G2 |
 | **`slow`** (rollout simulation > 5s) | 1 | NERSC Perlmutter GPU compute node | D2 |
 | **`live`** (external network / HF Hub) | 0 | N/A (all offline) | D2 |
-| **Total Test Suite** | **119** | Full suite passes across environments | F1, G1–G5, H1 |
+| **Total Test Suite** | **122** | Full suite passes across environments | F1, G1–G5, H1–H2 |
 
 ---
 
@@ -90,3 +91,5 @@ Measured locally via `uv run pytest --collect-only`:
 | **Broad `try...except` Statics** | `StaticVarLoadError` hard failure | Silent zero-substitutions masked missing data and filesystem errors. |
 | **`model_type: huge`** | `model_type: full` (`AuroraPretrained`) | `huge` referenced HRES-analysis fine-tune; `full` loads ERA5-pretrained 1.3B Swin3D backbone. |
 | **Pre-H1 Unnormalised Loss** | Normalised, weighted grid loss (Task H1) | Raw physical units caused msl/z to dominate >99% gradient budget, starving q (~0.000012%). |
+| **Pre-H2 `SpectralLoss` (flat-vector FFT)** | Per-variable spatial `SpectralLoss` (Task H2) | Old code flattened all variables into `(B, N)` and called `rfft2` over `(batch, everything)` — a 1-D FFT over a mixed-unit vector, not a spatial spectrum. Defect R6 corrected. |
+| **`_extract_batch_outputs` in `trainer.py`** | Deleted (H2) | Only caller was the old flat-vector spectral path; `SpectralLoss.forward_per_var` now handles per-variable iteration directly. |

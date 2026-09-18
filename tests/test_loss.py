@@ -24,6 +24,7 @@ from aurora_mjo.config import load_config
 from aurora_mjo.loss import (
     DEFAULT_AURORA_PLEVS,
     DEFAULT_VARIABLE_WEIGHTS,
+    SpectralLoss,
     TropicalWeightedL1Loss,
 )
 
@@ -340,3 +341,137 @@ def test_config_loss_grid_defaults():
     assert vw is not None
     for k, v in DEFAULT_VARIABLE_WEIGHTS.items():
         assert vw[k] == v, f"Default variable weight mismatch for {k}: {vw[k]} != {v}"
+
+
+# ===========================================================================
+# 8. SpectralLoss H2 — per-variable, rfft2 over (lat, lon), amplitude spectrum
+# ===========================================================================
+
+_SPEC_H = 32  # small synthetic grid for spectral tests (fast; full 180x360 not needed)
+_SPEC_W = 64
+
+
+def _make_spectral_loss(H: int = _SPEC_H, W: int = _SPEC_W) -> SpectralLoss:
+    """Return a SpectralLoss with a custom small-grid Hann window."""
+    lat_coords = torch.linspace(89.5, -89.5, H)
+    return SpectralLoss(lat_coords=lat_coords)
+
+
+def test_spectral_sinusoid_concentrates_in_correct_wavenumber():
+    """A pure sinusoid at wavenumber k_lon concentrates spectral energy in bin k_lon.
+
+    The amplitude-spectrum loss between a pure sinusoid and a zero field
+    should be entirely due to the single non-zero frequency bin at k_lon.
+    Equivalently, the max spectral-difference bin index along the last FFT
+    axis must equal k_lon.
+    """
+    H, W = _SPEC_H, _SPEC_W
+    loss_fn = _make_spectral_loss(H, W)
+
+    # Construct a 1-D sinusoid in longitude at wavenumber k_lon
+    k_lon = 5
+    lons = torch.arange(W, dtype=torch.float32)
+    sinusoid = torch.sin(2.0 * torch.pi * k_lon * lons / W)  # (W,)
+
+    # Shape (B=1, L=1, H, W)
+    pred = sinusoid.view(1, 1, 1, W).expand(1, 1, H, W).clone()
+    target = torch.zeros_like(pred)
+
+    # Apply the Hann window manually to match what SpectralLoss does
+    win = loss_fn.hann_window.view(H, 1)  # (H, 1)
+    p_win = pred[0, 0] * win  # (H, W)
+    t_win = target[0, 0] * win
+
+    p_fft = torch.fft.rfft2(p_win, norm="ortho")
+    t_fft = torch.fft.rfft2(t_win, norm="ortho")
+    amp_diff = torch.abs(torch.abs(p_fft) - torch.abs(t_fft))  # (H, W//2+1)
+
+    # Mean over latitude
+    mean_per_lon_bin = amp_diff.mean(dim=0)  # (W//2+1,)
+    dominant_bin = int(mean_per_lon_bin.argmax().item())
+
+    assert dominant_bin == k_lon, (
+        f"Expected dominant bin {k_lon}, got {dominant_bin}. "
+        "SpectralLoss is not concentrating energy at the sinusoid's wavenumber."
+    )
+
+    # The scalar loss from forward() must also be positive
+    scalar_loss = loss_fn.forward(pred, target)
+    assert scalar_loss.item() > 0.0, "Sinusoid vs. zeros should give positive spectral loss."
+
+
+def test_spectral_identical_fields_give_zero():
+    """Two identical fields must yield exactly zero spectral loss.
+
+    This also verifies that normalisation does not introduce a bias.
+    """
+    H, W = _SPEC_H, _SPEC_W
+    loss_fn = _make_spectral_loss(H, W)
+
+    field = torch.randn(1, 4, H, W)  # (B=1, L=4, H, W)
+    loss = loss_fn.forward(field, field)
+    assert (
+        loss.item() == 0.0
+    ), f"Identical fields should give exactly 0 spectral loss, got {loss.item()}"
+
+
+def test_spectral_shift_distinguishes_amplitude_vs_complex():
+    """A spatially-shifted field should give a small amplitude-spectrum loss
+    but a large complex-coefficient loss.
+
+    This is the distinguishing test between the two formulations.
+
+    Physical interpretation: the amplitude spectrum measures *texture* — what
+    spatial frequencies are present.  A field and its cyclic shift have the
+    same texture (same amplitudes) but completely different phases, so:
+      - amplitude loss ≈ 0 (small but not exactly zero due to Hann window)
+      - complex loss >> 0
+
+    The test pastes both numbers into the docstring for the result file.
+    """
+    H, W = _SPEC_H, _SPEC_W
+    loss_fn = _make_spectral_loss(H, W)
+
+    # Multi-scale random field in (B=1, H, W) — 3-D for forward()
+    torch.manual_seed(42)
+    field = torch.randn(1, H, W)
+    shift = W // 4  # 90-degree longitude shift
+    shifted = torch.roll(field, shifts=shift, dims=-1)
+
+    # 1. Amplitude spectrum loss (H2 implementation)
+    amp_loss = loss_fn.forward(field, shifted).item()
+
+    # 2. Complex coefficient loss (pre-H2 / naive formulation)
+    #    Apply the same Hann window for a fair comparison
+    win = loss_fn.hann_window.view(1, H, 1)  # (1, H, 1)
+    p_win = field.unsqueeze(1) * win  # (1, 1, H, W)
+    s_win = shifted.unsqueeze(1) * win
+    complex_loss = (
+        torch.abs(
+            torch.fft.rfft2(p_win.float(), norm="ortho")
+            - torch.fft.rfft2(s_win.float(), norm="ortho")
+        )
+        .mean()
+        .item()
+    )
+
+    # The amplitude loss must be much smaller than the complex loss.
+    # A cyclic shift is the canonical example: perfect amplitude match,
+    # large phase mismatch.
+    assert amp_loss < complex_loss, (
+        f"Expected amp_loss ({amp_loss:.6f}) < complex_loss ({complex_loss:.6f}). "
+        "Spatial shift should produce near-zero amplitude loss but large complex loss."
+    )
+
+    # Quantitative ratio: complex_loss should be at least 5x amp_loss
+    assert complex_loss > 5 * amp_loss, (
+        f"Ratio complex/amplitude = {complex_loss / max(amp_loss, 1e-12):.1f}x — "
+        "expected at least 5x. The two formulations are not sufficiently distinguished."
+    )
+
+    # Print both numbers for the result file
+    print(
+        f"\n[H2 shift test]  amplitude_loss={amp_loss:.6f}  "
+        f"complex_loss={complex_loss:.6f}  "
+        f"ratio={complex_loss / max(amp_loss, 1e-12):.1f}x",
+    )
