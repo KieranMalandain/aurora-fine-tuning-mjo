@@ -1,59 +1,331 @@
 # src/loss.py
+from __future__ import annotations
+
+from pathlib import Path
+
 import torch
 import torch.nn.functional as F
+import yaml
 from torch import nn
+
+DEFAULT_AURORA_PLEVS = (50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 850, 925, 1000)
+
+# Default variable weights w_v matching 02_SCIENTIFIC_CONTRACT.md §4.1:
+# MJO convective variables: 2.0; dynamical wind/temp: 1.0; state/surface: 0.5.
+# Set a priori based on physical domain priors and NOT tuned against validation skill.
+DEFAULT_VARIABLE_WEIGHTS: dict[str, float] = {
+    "ttr": 2.0,
+    "tcwv": 2.0,
+    "q": 2.0,
+    "u": 1.0,
+    "v": 1.0,
+    "t": 1.0,
+    "z": 0.5,
+    "msl": 0.5,
+    "2t": 0.5,
+    "10u": 0.5,
+    "10v": 0.5,
+}
 
 
 class TropicalWeightedL1Loss(nn.Module):
-    """
-    Standard L1 (MAE) loss, but applies a multiplier to the tropical
-    region to force the model to focus on MJO-relevant latitudes.
+    """Normalised, weighted, area-correct grid loss (02_SCIENTIFIC_CONTRACT.md §4).
 
-    Accepts tensors of any shape as long as one dimension matches the
-    latitude axis length (180 for Aurora 1deg grid).  Weights are
-    stored as 1-D and reshaped dynamically so the loss works with
-    per-variable inputs of different ranks:
-      - Surface:  (B, H, W)      or (B, 1, H, W)
-      - Atmos:    (B, levels, H, W)
+    Mathematical specification
+    ==========================
+    L_grid = Σ_v w_v · ( 1 / (H · W) ) · Σ_ℓ Σ_φ Σ_λ c_ℓ · a(φ) · m(φ) · | x̂_vℓφλ − x_vℓφλ |
+
+    where:
+      - x̂, x are normalised by the training-period constants (1980–2015 Welford stats from G3).
+        Aurora denormalises its output, so both prediction and target are re-normalised before
+        loss calculation (the denormalise-then-renormalise path).
+      - w_v is the per-variable weight (config-visible, defaults in §4.1).
+      - c_ℓ is the per-level weight (default: Δp_ℓ / Σ Δp, summing to 1.0; c_ℓ ≡ 1 for surface vars).
+      - a(φ) = cos(φ) / mean(cos(φ)) is area weighting, integrating to 1 over the sphere.
+      - m(φ) is the tropical emphasis (1.0 inside ±20°, 0.1 outside).
+      - a(φ) and m(φ) are separate, applied multiplicatively.
     """
 
     def __init__(
         self,
-        lat_coords,
-        tropics_bbox=[-20, 20],
-        tropics_weight=1.0,
-        extratropics_weight=0.1,
+        lat_coords: torch.Tensor | list[float] | None = None,
+        tropics_bbox: list[int] | tuple[int, int] = (-20, 20),
+        tropics_weight: float = 1.0,
+        extratropics_weight: float = 0.1,
+        level_weighting: str = "pressure_delta",
+        pressure_levels: list[int | float] | tuple[int | float, ...] | None = None,
+        variable_weights: dict[str, float] | None = None,
+        norm_stats: dict | None = None,
+        norm_stats_file: str | Path | None = None,
     ):
         super().__init__()
         self.l1 = nn.L1Loss(reduction="none")
-        self.n_lat = lat_coords.shape[0]
+        self.level_weighting = level_weighting.lower()
 
-        weights = torch.ones_like(lat_coords)
-        tropical_mask = (lat_coords >= tropics_bbox[0]) & (
-            lat_coords <= tropics_bbox[1]
-        )
+        # ---- Coordinates & Grid Geometry ---------------------------------
+        if lat_coords is None:
+            lat_coords = torch.linspace(89.5, -89.5, 180)
+        lat_tensor = torch.as_tensor(lat_coords, dtype=torch.float32)
+        self.n_lat = lat_tensor.shape[0]
 
-        weights[tropical_mask] = tropics_weight
-        weights[~tropical_mask] = extratropics_weight
+        # Cos-latitude area weighting: a(φ) = cos(φ) / mean(cos(φ))
+        cos_lat = torch.cos(torch.deg2rad(lat_tensor))
+        cos_lat = torch.clamp(cos_lat, min=0.0)
+        a_phi = cos_lat / cos_lat.mean()  # mean is 1.0 (integrates to 1 over the sphere)
 
-        self.register_buffer("lat_weights", weights)  # (H,)
+        # Tropical emphasis mask: m(φ)
+        m_phi = torch.full_like(lat_tensor, float(extratropics_weight))
+        trop_mask = (lat_tensor >= tropics_bbox[0]) & (lat_tensor <= tropics_bbox[1])
+        m_phi[trop_mask] = float(tropics_weight)
 
-    def forward(self, pred, target):
-        loss = self.l1(pred, target)
+        # Multiplicative separation: store a(φ) and m(φ) separately
+        self.register_buffer("area_weights", a_phi)
+        self.register_buffer("tropical_weights", m_phi)
+        self.register_buffer("spatial_weights", a_phi * m_phi)
 
-        lat_dim = None
-        for d in range(1, loss.ndim - 1):
-            if loss.shape[d] == self.n_lat:
-                lat_dim = d
-                break
+        # ---- Vertical Level Weighting c_ℓ --------------------------------
+        plevs_list = list(pressure_levels or DEFAULT_AURORA_PLEVS)
+        plevs_t = torch.tensor(plevs_list, dtype=torch.float32)
+        self.register_buffer("plevs", plevs_t)
 
+        if self.level_weighting == "pressure_delta":
+            dp = torch.zeros_like(plevs_t)
+            dp[0] = plevs_t[1] - plevs_t[0]
+            dp[1:-1] = (plevs_t[2:] - plevs_t[:-2]) / 2.0
+            dp[-1] = plevs_t[-1] - plevs_t[-2]
+            c_l = dp / dp.sum()
+        elif self.level_weighting == "uniform":
+            c_l = torch.ones_like(plevs_t) / len(plevs_t)
+        else:
+            raise ValueError(
+                f"Unknown level_weighting: {level_weighting!r}. Must be 'pressure_delta' or 'uniform'."
+            )
+        self.register_buffer("c_l", c_l)
+
+        # ---- Variable Weights w_v ----------------------------------------
+        self.variable_weights: dict[str, float] = dict(DEFAULT_VARIABLE_WEIGHTS)
+        if variable_weights:
+            self.variable_weights.update(variable_weights)
+
+        # ---- Normalisation Constants (G3 1980–2015 Welford Statistics) ---
+        stats_dict = self._load_norm_stats(norm_stats, norm_stats_file)
+        self.surf_vars = ("2t", "10u", "10v", "msl", "ttr", "tcwv", "sst", "ps")
+        self.atmos_vars = ("z", "q", "t", "u", "v")
+
+        # Register normalisation buffers for surface variables
+        for v in self.surf_vars:
+            mean_val, std_val = self._extract_surf_stats(v, stats_dict)
+            self.register_buffer(f"surf_mean_{v}", torch.tensor(mean_val, dtype=torch.float32))
+            self.register_buffer(f"surf_std_{v}", torch.tensor(std_val, dtype=torch.float32))
+
+        # Register normalisation buffers for atmospheric variables across 13 levels
+        for v in self.atmos_vars:
+            mean_vec, std_vec = self._extract_atmos_stats(v, stats_dict, plevs_list)
+            self.register_buffer(f"atmos_mean_{v}", mean_vec)
+            self.register_buffer(f"atmos_std_{v}", std_vec)
+
+    @staticmethod
+    def _load_norm_stats(
+        norm_stats: dict | None,
+        norm_stats_file: str | Path | None,
+    ) -> dict:
+        if norm_stats is not None:
+            return norm_stats
+
+        candidate_paths = []
+        if norm_stats_file is not None:
+            candidate_paths.append(Path(norm_stats_file))
+        repo_root = Path(__file__).resolve().parent.parent.parent
+        candidate_paths.extend([
+            repo_root / "configs" / "norm_stats_1980_2015.yaml",
+            Path("configs/norm_stats_1980_2015.yaml"),
+        ])
+
+        for p in candidate_paths:
+            if p.is_file():
+                with open(p) as f:
+                    return yaml.safe_load(f) or {}
+        return {}
+
+    def _extract_surf_stats(self, var_name: str, stats_dict: dict) -> tuple[float, float]:
+        # 1. From passed G3 norm stats dict
+        surf_stats = stats_dict.get("surface", {})
+        if var_name in surf_stats:
+            entry = surf_stats[var_name]
+            return float(entry["mean"]), float(entry["std"])
+        # 2. Check top-level (if unified.yaml model.norm_stats shape)
+        if var_name in stats_dict and isinstance(stats_dict[var_name], dict):
+            entry = stats_dict[var_name]
+            if "mean" in entry and "std" in entry:
+                return float(entry["mean"]), float(entry["std"])
+        # 3. Fallback to aurora.normalisation
+        import aurora.normalisation as norm
+
+        loc = float(norm.locations.get(var_name, 0.0))
+        scale = float(norm.scales.get(var_name, 1.0))
+        return loc, scale
+
+    def _extract_atmos_stats(
+        self,
+        var_name: str,
+        stats_dict: dict,
+        plevs_list: list[int | float],
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        means, stds = [], []
+        atmos_stats = stats_dict.get("atmos", {}).get(var_name, {})
+
+        import aurora.normalisation as norm
+
+        for lev in plevs_list:
+            lev_int = int(lev)
+            if lev_int in atmos_stats or str(lev_int) in atmos_stats:
+                entry = atmos_stats.get(lev_int) or atmos_stats[str(lev_int)]
+                means.append(float(entry["mean"]))
+                stds.append(float(entry["std"]))
+            else:
+                aurora_key = f"{var_name}_{lev_int}"
+                means.append(float(norm.locations.get(aurora_key, 0.0)))
+                stds.append(float(norm.scales.get(aurora_key, 1.0)))
+
+        return torch.tensor(means, dtype=torch.float32), torch.tensor(stds, dtype=torch.float32)
+
+    def get_var_weight(self, var_name: str) -> float:
+        """Return the scalar weight w_v for variable var_name."""
+        return float(self.variable_weights.get(var_name, 1.0))
+
+    def loss_per_var(
+        self,
+        pred: torch.Tensor,
+        target: torch.Tensor,
+        var_name: str | None = None,
+    ) -> torch.Tensor:
+        """Compute normalised, area-weighted, level-weighted L1 loss for a single variable.
+
+        Denormalise-then-renormalise path (02_SCIENTIFIC_CONTRACT.md §4):
+        Aurora outputs prognostic variables in denormalised physical units.
+        To prevent large-magnitude variables like msl (~9500 Pa) and z (~3800 m^2/s^2)
+        from dominating 99% of the gradient budget over small-magnitude moisture
+        variables like q (~0.0016 kg/kg), both prediction and target are re-normalised
+        using the training population constants (1980–2015 Welford stats from G3)
+        prior to computing the L1 error.
+        """
+        # --- Surface Variable Path ---
+        if var_name is not None and hasattr(self, f"surf_mean_{var_name}"):
+            mean = getattr(self, f"surf_mean_{var_name}")
+            std = getattr(self, f"surf_std_{var_name}")
+            p_norm = (pred - mean) / std
+            tgt_norm = (target - mean) / std
+            diff = torch.abs(p_norm - tgt_norm)
+
+            lat_dim = self._find_lat_dim(diff)
+            if lat_dim is not None:
+                shape = [1] * diff.ndim
+                shape[lat_dim] = self.n_lat
+                w = self.spatial_weights.view(*shape)
+                return (diff * w).mean()
+            return diff.mean()
+
+        # --- Atmospheric Variable Path ---
+        if var_name is not None and hasattr(self, f"atmos_mean_{var_name}"):
+            mean = getattr(self, f"atmos_mean_{var_name}")
+            std = getattr(self, f"atmos_std_{var_name}")
+
+            level_dim = self._find_level_dim(pred)
+            if level_dim is not None:
+                level_shape = [1] * pred.ndim
+                level_shape[level_dim] = len(self.plevs)
+
+                p_norm = (pred - mean.view(*level_shape)) / std.view(*level_shape)
+                tgt_norm = (target - mean.view(*level_shape)) / std.view(*level_shape)
+                diff = torch.abs(p_norm - tgt_norm)
+
+                # Weight levels by c_ℓ (pressure-delta or uniform)
+                c_l_view = self.c_l.view(*level_shape)
+                level_diff = (diff * c_l_view).sum(dim=level_dim)
+            else:
+                diff = torch.abs(pred - target)
+                level_diff = diff.mean(dim=1) if pred.ndim >= 4 else diff
+
+            # Area weighting and tropical mask on remaining spatial dimensions
+            lat_dim = self._find_lat_dim(level_diff)
+            if lat_dim is not None:
+                spatial_shape = [1] * level_diff.ndim
+                spatial_shape[lat_dim] = self.n_lat
+                w = self.spatial_weights.view(*spatial_shape)
+                return (level_diff * w).mean()
+            return level_diff.mean()
+
+        # --- Fallback / Unnormalised Path (e.g. legacy/probe calls without var_name) ---
+        diff = torch.abs(pred - target)
+        level_dim = self._find_level_dim(diff)
+        if level_dim is not None:
+            level_shape = [1] * diff.ndim
+            level_shape[level_dim] = len(self.plevs)
+            c_l_view = self.c_l.view(*level_shape)
+            diff = (diff * c_l_view).sum(dim=level_dim)
+
+        lat_dim = self._find_lat_dim(diff)
         if lat_dim is not None:
-            shape = [1] * loss.ndim
-            shape[lat_dim] = self.n_lat
-            w = self.lat_weights.view(*shape)
-            loss = loss * w
+            spatial_shape = [1] * diff.ndim
+            spatial_shape[lat_dim] = self.n_lat
+            w = self.spatial_weights.view(*spatial_shape)
+            return (diff * w).mean()
+        return diff.mean()
 
-        return loss.mean()
+    def _find_lat_dim(self, t: torch.Tensor) -> int | None:
+        for d in range(t.ndim):
+            if t.shape[d] == self.n_lat:
+                return d
+        return None
+
+    def _find_level_dim(self, t: torch.Tensor) -> int | None:
+        n_levs = len(self.plevs)
+        for d in range(t.ndim):
+            if t.shape[d] == n_levs:
+                return d
+        return None
+
+    def forward(
+        self,
+        pred: torch.Tensor,
+        target: torch.Tensor,
+        var_name: str | None = None,
+    ) -> torch.Tensor:
+        """Forward pass for a single variable prediction and target."""
+        return self.loss_per_var(pred, target, var_name=var_name)
+
+    def compute_batch(
+        self,
+        pred_batch,
+        target_dict: dict[str, torch.Tensor],
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        """Compute weighted composite grid loss and per-variable components for a batch.
+
+        Returns:
+            (total_weighted_loss, dict_of_per_var_losses)
+        """
+        grid_var_losses: dict[str, torch.Tensor] = {}
+        weighted_losses: list[torch.Tensor] = []
+
+        for attr in ("surf_vars", "atmos_vars"):
+            if hasattr(pred_batch, attr):
+                for var_name, pred_t in getattr(pred_batch, attr).items():
+                    if var_name in target_dict:
+                        tgt_t = target_dict[var_name].to(pred_t.device).float()
+                        p = pred_t.float()
+                        while p.ndim > tgt_t.ndim and p.shape[1] == 1:
+                            p = p.squeeze(1)
+                        while tgt_t.ndim > p.ndim and (tgt_t.shape[0] == 1 or tgt_t.shape[1] == 1):
+                            tgt_t = tgt_t.squeeze(0) if tgt_t.shape[0] == 1 else tgt_t.squeeze(1)
+
+                        v_loss = self.loss_per_var(p, tgt_t, var_name=var_name)
+                        w_v = self.get_var_weight(var_name)
+                        grid_var_losses[var_name] = v_loss
+                        weighted_losses.append(w_v * v_loss)
+
+        zero_dev = self.c_l.device
+        total_loss = sum(weighted_losses) if weighted_losses else torch.zeros((), device=zero_dev)
+        return total_loss, grid_var_losses
 
 
 class SpectralLoss(nn.Module):

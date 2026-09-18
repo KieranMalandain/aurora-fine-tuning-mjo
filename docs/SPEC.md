@@ -176,7 +176,41 @@ Over a 6-hour forecast step, sea surface temperature is nearly constant. Over a 
 
 ---
 
-## 7. Promoted Durable Findings: The Seven Lessons
+## 7. Prognostic Grid Loss Formulation (Task H1)
+
+### 7.1 Loss Formulation
+The composite grid loss $\mathcal{L}_{\text{grid}}$ is computed on **normalised errors** to preserve gradient balance across variables differing by orders of magnitude in physical units:
+
+$$\mathcal{L}_{\text{grid}} = \sum_{v \in \mathcal{V}} w_v \cdot \mathcal{L}_v$$
+
+Where $\mathcal{V}$ comprises the 6 surface and 5 atmospheric variables.
+
+For each surface variable $v \in \{\text{2t, 10u, 10v, msl, ttr, tcwv}\}$:
+$$\mathcal{L}_v = \frac{1}{\sum_\phi a(\phi) m(\phi)} \sum_{\phi, \lambda} a(\phi) m(\phi) \left| \frac{\hat{x}_{v,\phi,\lambda} - \mu_v}{\sigma_v} - \frac{y_{v,\phi,\lambda} - \mu_v}{\sigma_v} \right|$$
+
+For each atmospheric variable $v \in \{\text{z, q, t, u, v}\}$ across the 13 pressure levels $\ell \in \{50, \dots, 1000\}\text{ hPa}$:
+$$\mathcal{L}_v = \frac{1}{\sum_\phi a(\phi) m(\phi)} \sum_{\phi, \lambda} a(\phi) m(\phi) \sum_{\ell=1}^{13} c_\ell \left| \frac{\hat{x}_{v,\ell,\phi,\lambda} - \mu_{v,\ell}}{\sigma_{v,\ell}} - \frac{y_{v,\ell,\phi,\lambda} - \mu_{v,\ell}}{\sigma_{v,\ell}} \right|$$
+
+### 7.2 Weighting Components
+1. **Latitude Area Weighting $a(\phi)$:** Corrects for converging meridians on a regular 1° grid:
+   $$a(\phi) = \frac{\cos \phi}{\frac{1}{N_\phi} \sum_{j=1}^{N_\phi} \cos \phi_j}, \quad \text{normalized such that } \frac{1}{N_\phi} \sum_{\phi} a(\phi) = 1$$
+2. **Tropical Emphasis $m(\phi)$:** Focuses gradient updates on MJO-relevant dynamics while maintaining global coverage:
+   $$m(\phi) = \begin{cases} 1.0 & \text{if } |\phi| \le 20^\circ \text{ (tropics)} \\ 0.1 & \text{if } |\phi| > 20^\circ \text{ (extratropics)} \end{cases}$$
+   $a(\phi)$ and $m(\phi)$ remain **strictly separate and multiplicative** ($w(\phi) = a(\phi) m(\phi)$).
+3. **Vertical Level Weighting $c_\ell$:** Defaults to pressure-thickness weighting:
+   $$c_\ell = \frac{\Delta p_\ell}{\sum_{k} \Delta p_k}, \quad \sum_{\ell} c_\ell = 1.0$$
+   Where $\Delta p_\ell$ represents layer thicknesses via central differences (one-sided at boundaries), naturally weighting lower tropospheric moisture dynamics. A `uniform` alternative ($c_\ell = 1/13$) is config-selectable.
+4. **Variable Importance Weights $w_v$:** Configured in `configs/unified.yaml` and set *a priori* based on physical importance to MJO convection without validation tuning:
+   - $w_v = 2.0$: Convective & moisture-mode variables (`ttr`, `tcwv`, `q`)
+   - $w_v = 1.0$: Dynamics & thermal fields (`u`, `v`, `t`)
+   - $w_v = 0.5$: Large-scale balance & boundary fields (`z`, `msl`, `2t`, `10u`, `10v`)
+
+### 7.3 Denormalise-Then-Renormalise Path
+Aurora predicts prognostic outputs in physical units. Both predictions and ground truth targets are re-normalised using the 1980–2015 Welford training population statistics (`configs/norm_stats_1980_2015.yaml` from Task G3) prior to computing absolute differences. This eliminates scientific defect R1 where raw `msl` and `z` consumed 99.03% of the gradient budget.
+
+---
+
+## 8. Promoted Durable Findings: The Eight Lessons
 
 The following lessons were established through real failures on Perlmutter:
 
@@ -214,9 +248,14 @@ The following lessons were established through real failures on Perlmutter:
 - **Mechanism:** Reasoning against remembered or documented state rather than inspecting real filesystem artifacts leads to false assumptions and wasted queue time.
 - **Guard:** Protocol mandates measured assertions, stdlib verification gate (`scripts/check.py`), and B1/C4 behavioral fingerprinting.
 
+### Lesson 8: Unnormalised Losses Starve Moisture Modes (Defect R1)
+- **Mechanism:** Computing L1 losses in raw physical units results in large-scale geopotential ($z \sim 10^4$) and pressure ($msl \sim 10^5$) consuming >99% of backpropagated gradients, starving specific humidity ($q \sim 10^{-3}$) with an effective $5.8 \times 10^6 : 1$ gradient disparity.
+- **Guard:** `TropicalWeightedL1Loss` enforces re-normalisation with 1980–2015 Welford stats, area weighting $a(\phi)$, pressure-delta vertical weighting $c_\ell$, and config-locked $w_v$.
+- **Regression Test:** [`tests/test_loss.py::test_headline_per_variable_gradient_share`](../tests/test_loss.py)
+
 ---
 
-## 8. Upstream Traps & Architectural Guards
+## 9. Upstream Traps & Architectural Guards
 
 | Upstream Trap | Architectural Failure Mode | Enforcing Code Guard | Verified In Test |
 | :--- | :--- | :--- | :--- |
@@ -228,7 +267,7 @@ The following lessons were established through real failures on Perlmutter:
 
 ---
 
-## 9. Non-Goals
+## 10. Non-Goals
 
 The following areas are explicitly **out of scope** for the current architecture:
 1. **Unclamped Rollout Backprop (Finding 3):** Autoregressive rollouts currently do not clamp predictions before feeding them back into inputs. Resolving this requires deliberate scientific modeling in a future campaign.
@@ -239,7 +278,7 @@ The following areas are explicitly **out of scope** for the current architecture
 
 ---
 
-## 10. Open Items
+## 11. Open Items
 
 | Item ID | Description | Impact / Blocks | Default / Current Mitigation |
 | :--- | :--- | :--- | :--- |

@@ -317,15 +317,15 @@ def test_sst_freeze_backbone_trainable() -> None:
 
     surf_embed = m.encoder.surf_token_embeds
     assert "sst" in surf_embed.weights
-    assert (
-        surf_embed.weights["sst"].requires_grad is True
-    ), "SST embedding weights must have requires_grad=True!"
+    assert surf_embed.weights["sst"].requires_grad is True, (
+        "SST embedding weights must have requires_grad=True!"
+    )
 
     # Built-in statics must be frozen
     for var in ("lsm", "z", "slt"):
-        assert (
-            surf_embed.weights[var].requires_grad is False
-        ), f"Built-in static '{var}' should be frozen!"
+        assert surf_embed.weights[var].requires_grad is False, (
+            f"Built-in static '{var}' should be frozen!"
+        )
 
     # Built-in default surf vars must be frozen
     for var in ("2t", "10u", "10v"):
@@ -389,9 +389,9 @@ def test_sst_rollout_persistence(synthetic_dataset: LANLMJODataset) -> None:
 
     assert current_batch.metadata.rollout_step == 119
     step_119_sst = current_batch.static_vars["sst"]
-    assert torch.equal(
-        initial_sst, step_119_sst
-    ), "SST at rollout step 119 is not bitwise identical to rollout step 0!"
+    assert torch.equal(initial_sst, step_119_sst), (
+        "SST at rollout step 119 is not bitwise identical to rollout step 0!"
+    )
 
 
 @pytest.mark.needs_data

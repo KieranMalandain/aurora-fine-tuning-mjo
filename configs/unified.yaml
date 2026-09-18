@@ -60,9 +60,26 @@ model:
 loss:
   grid:
     enabled: true
+    weight: 1.0
     tropics_bbox: [-20, 20]
     tropics_weight: 1.0
     extratropics_weight: 0.1
+    level_weighting: "pressure_delta"   # "pressure_delta" (c_ℓ = Δp_ℓ / Σ Δp) | "uniform"
+    # Variable weights w_v: set a priori based on physical domain priors (02_SCIENTIFIC_CONTRACT.md §4.1)
+    # and MUST NOT be tuned against validation skill to prevent evaluation leakage (§6.3).
+    # MJO convective variables: 2.0; dynamical wind/temp fields: 1.0; state/surface fields: 0.5.
+    variable_weights:
+      ttr: 2.0
+      tcwv: 2.0
+      q: 2.0
+      u: 1.0
+      v: 1.0
+      t: 1.0
+      z: 0.5
+      msl: 0.5
+      2t: 0.5
+      10u: 0.5
+      10v: 0.5
   spectral:         { enabled: false, weight: 0.0 }
   mjo_head:         { enabled: false, weight: 0.0 }
   moisture_budget:  { enabled: false, weight: 0.0 }
