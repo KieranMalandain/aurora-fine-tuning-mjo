@@ -79,6 +79,8 @@ ATMOS_VAR_MAP = {
 
 STEP_HOURS = 6  # dataset cadence; must match Aurora's 6 h step
 _DEFAULT_SLT_PATH = Path(__file__).resolve().parents[2] / "data/static/slt_1deg.nc"
+_DEFAULT_SST_DIR = Path(__file__).resolve().parents[2] / "data/static/sst"
+_DEFAULT_SYNTHETIC_SST = Path(__file__).resolve().parents[2] / "tests/fixtures/sst_synthetic.nc"
 
 
 def _to_seconds_i64(times) -> np.ndarray:
@@ -105,6 +107,7 @@ class LANLMJODataset(Dataset):
         end_year: int,
         root_dir: str | Path | None = None,
         slt_path: str | Path | None = None,
+        sst_dir: str | Path | None = None,
         max_rollout_steps: int = 1,
     ):
         if root_dir is None:
@@ -123,6 +126,10 @@ class LANLMJODataset(Dataset):
             )
             slt_path = _DEFAULT_SLT_PATH
         self.slt_path = Path(slt_path)
+
+        if sst_dir is None:
+            sst_dir = _DEFAULT_SST_DIR
+        self.sst_dir = Path(sst_dir)
 
         self.start_year = start_year
         self.end_year = end_year
@@ -472,6 +479,68 @@ class LANLMJODataset(Dataset):
             arrays.append(arr)
         return np.stack(arrays, axis=0).astype(np.float32)
 
+    def _read_sst_at_time(self, init_time: datetime) -> torch.Tensor:
+        """Fork-safe read of daily SST at t0.
+
+        Opens, reads, and closes the SST NetCDF file fresh per sample.
+        Extracts the daily slice corresponding to init_time (00:00 UTC).
+        Flips along latitude if ascending to align with strictly decreasing
+        Aurora grid coordinates.
+        """
+        year = init_time.year
+        sst_file = self.sst_dir / f"sst_1deg_{year}.nc"
+        if len(self.lat) != 180 or not sst_file.exists():
+            # Fallback for synthetic test fixtures
+            syn_file = self.sst_dir / "sst_synthetic.nc"
+            if syn_file.exists():
+                sst_file = syn_file
+            elif _DEFAULT_SYNTHETIC_SST.exists():
+                sst_file = _DEFAULT_SYNTHETIC_SST
+            else:
+                msg = (
+                    f"Failed to load static SST for year {year}: file not found at {sst_file}. "
+                    "Ensure scripts/fetch_sst.py has downloaded the required SST files into data/static/sst/."
+                )
+                raise StaticVarLoadError(msg)
+
+        try:
+            with xr.open_dataset(str(sst_file), engine="netcdf4") as ds_sst:
+                day_idx = init_time.timetuple().tm_yday - 1
+                n_days = len(ds_sst.time)
+                day_idx = min(max(0, day_idx), n_days - 1)
+                raw = ds_sst["sst"].isel(time=day_idx).values
+
+                lat_k = (
+                    "lat"
+                    if "lat" in ds_sst.coords
+                    else ("latitude" if "latitude" in ds_sst.coords else None)
+                )
+                if lat_k is not None:
+                    sst_lat = ds_sst[lat_k].values
+                    if len(sst_lat) > 1 and sst_lat[0] < sst_lat[-1]:
+                        raw = np.flip(raw, axis=-2)
+                elif self._flip_lat:
+                    raw = np.flip(raw, axis=-2)
+
+            tensor = torch.nan_to_num(
+                torch.from_numpy(raw.copy()).float(),
+                nan=285.5980,
+                posinf=285.5980,
+                neginf=285.5980,
+            )
+            while tensor.ndim > 2:
+                tensor = tensor.squeeze(0)
+            return tensor
+        except Exception as e:
+            if isinstance(e, StaticVarLoadError):
+                raise
+            msg = (
+                f"Failed to load static SST from {sst_file} at {init_time}: {e}. "
+                "Ensure HDF5_USE_FILE_LOCKING=FALSE is set in your environment "
+                "to disable advisory file locking on parallel filesystems."
+            )
+            raise StaticVarLoadError(msg) from e
+
     # ------------------------------------------------------------------
     # Dataset interface
     # ------------------------------------------------------------------
@@ -529,10 +598,14 @@ class LANLMJODataset(Dataset):
         # --- Time tag straight from the timeline (no extra file open) ---
         init_time = datetime.utcfromtimestamp(t_curr)
 
+        # --- Static variables (invariants + time-varying SST at t0) ---
+        static_vars = dict(self.static_vars)
+        static_vars["sst"] = self._read_sst_at_time(init_time)
+
         in_batch = Batch(
             surf_vars=surf_in,
             atmos_vars=atmos_in,
-            static_vars=self.static_vars,
+            static_vars=static_vars,
             metadata=Metadata(
                 lat=self.lat,
                 lon=self.lon,

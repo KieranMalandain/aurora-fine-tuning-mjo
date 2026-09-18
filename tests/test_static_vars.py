@@ -271,3 +271,162 @@ def test_real_cfs_static_vars_load_correctly() -> None:
     assert torch.isfinite(statics["z"]).all()
     assert torch.isfinite(statics["lsm"]).all()
     assert torch.isfinite(statics["slt"]).all()
+
+
+def test_sst_loaded_into_in_batch_static_vars(
+    synthetic_dataset: LANLMJODataset,
+) -> None:
+    """Verify that SST is loaded into in_batch.static_vars per sample at t0."""
+    in_batch, _, _ = synthetic_dataset[0]
+    statics = in_batch.static_vars
+    assert "sst" in statics, "Missing 'sst' in in_batch.static_vars"
+    sst_tensor = statics["sst"]
+    assert isinstance(sst_tensor, torch.Tensor)
+    assert sst_tensor.ndim == 2, f"Expected 2D SST tensor, got shape {sst_tensor.shape}"
+    assert sst_tensor.shape == (18, 36), f"Expected (18, 36), got {sst_tensor.shape}"
+    assert torch.isfinite(sst_tensor).all(), "SST tensor contains non-finite values"
+    # Physical range check: [271, 310] K per 03_DOMAIN_PRIORS.md §3
+    assert 271.0 <= sst_tensor.min().item(), f"SST min {sst_tensor.min().item()} < 271 K"
+    assert sst_tensor.max().item() <= 310.0, f"SST max {sst_tensor.max().item()} > 310 K"
+
+
+def test_sst_freeze_backbone_trainable() -> None:
+    """Verify freeze_backbone keeps newly injected static SST embedding trainable.
+
+    Verification method:
+    Aurora's Perceiver3DEncoder concatenates static_vars with surf_vars and
+    passes them through surf_token_embeds (LevelPatchEmbed). Newly added
+    static variables (not in _AURORA_DEFAULT_STATIC_VARS) are randomly initialized
+    and must have requires_grad=True, while default statics (lsm, z, slt) remain frozen.
+    Static variables have no decoder heads (decoder.surf_heads only contains surf_vars).
+    """
+    from aurora import AuroraSmallPretrained
+
+    from aurora_mjo.model import freeze_backbone
+
+    m = AuroraSmallPretrained(
+        surf_vars=("2t", "10u", "10v", "msl", "ttr", "tcwv"),
+        static_vars=("lsm", "z", "slt", "sst"),
+    )
+    freeze_backbone(
+        backbone=m,
+        new_surf_vars=("2t", "10u", "10v", "msl", "ttr", "tcwv"),
+        use_lora=False,
+        static_vars=("lsm", "z", "slt", "sst"),
+    )
+
+    surf_embed = m.encoder.surf_token_embeds
+    assert "sst" in surf_embed.weights
+    assert (
+        surf_embed.weights["sst"].requires_grad is True
+    ), "SST embedding weights must have requires_grad=True!"
+
+    # Built-in statics must be frozen
+    for var in ("lsm", "z", "slt"):
+        assert (
+            surf_embed.weights[var].requires_grad is False
+        ), f"Built-in static '{var}' should be frozen!"
+
+    # Built-in default surf vars must be frozen
+    for var in ("2t", "10u", "10v"):
+        assert surf_embed.weights[var].requires_grad is False
+
+    # Injected surf vars must be unfrozen
+    for var in ("ttr", "tcwv"):
+        assert surf_embed.weights[var].requires_grad is True
+
+    # SST has NO decoder head
+    assert "sst" not in m.decoder.surf_heads
+
+
+def test_sst_parameter_delta_exact() -> None:
+    """Verify that adding SST increases model parameters by exactly the embedding size."""
+    from aurora import AuroraSmallPretrained
+
+    m_base = AuroraSmallPretrained(
+        surf_vars=("2t", "10u", "10v", "msl", "ttr", "tcwv"),
+        static_vars=("lsm", "z", "slt"),
+    )
+    m_sst = AuroraSmallPretrained(
+        surf_vars=("2t", "10u", "10v", "msl", "ttr", "tcwv"),
+        static_vars=("lsm", "z", "slt", "sst"),
+    )
+
+    params_base = sum(p.numel() for p in m_base.parameters())
+    params_sst = sum(p.numel() for p in m_sst.parameters())
+    delta = params_sst - params_base
+
+    sst_weight = m_sst.encoder.surf_token_embeds.weights["sst"]
+    expected_delta = sst_weight.numel()
+    # For small: embed_dim=256, 1*2*4*4 = 32 -> 8,192
+    assert expected_delta == 8192
+    assert delta == expected_delta, f"Parameter delta {delta} != expected {expected_delta}"
+
+
+def test_sst_rollout_persistence(synthetic_dataset: LANLMJODataset) -> None:
+    """Verify SST persistence: in_batch.static_vars['sst'] is bitwise identical across 120 steps.
+
+    _advance_batch passes in_batch.static_vars forward unchanged across all rollout steps.
+    This test executes 119 state advances and asserts that static_vars['sst'] at step 119
+    is bitwise identical (torch.equal) to step 0.
+    """
+    from aurora_mjo.trainer import _advance_batch
+
+    in_batch, surf_targets, atmos_targets = synthetic_dataset[0]
+    initial_sst = in_batch.static_vars["sst"].clone()
+
+    current_batch = in_batch
+    # Mock pred_batch with matching shapes
+    mock_pred = in_batch
+
+    for step in range(119):
+        current_batch = _advance_batch(
+            in_batch=current_batch,
+            pred_batch=mock_pred,
+            step_index=step,
+            detach=True,
+        )
+
+    assert current_batch.metadata.rollout_step == 119
+    step_119_sst = current_batch.static_vars["sst"]
+    assert torch.equal(
+        initial_sst, step_119_sst
+    ), "SST at rollout step 119 is not bitwise identical to rollout step 0!"
+
+
+@pytest.mark.needs_data
+def test_real_cfs_sst_grid_equality_and_physical_range() -> None:
+    """Verify real CFS dataset returns SST matching grid coordinates and physical priors."""
+    if not REAL_CFS_ROOT.exists():
+        pytest.skip(f"Real CFS archive not mounted at {REAL_CFS_ROOT}")
+    slt_path = Path("data/static/slt_1deg.nc")
+    sst_dir = Path("data/static/sst")
+    if not (slt_path.exists() and sst_dir.exists()):
+        pytest.skip("Static files slt or sst not found")
+
+    ds = LANLMJODataset(
+        start_year=1980,
+        end_year=1980,
+        root_dir=REAL_CFS_ROOT,
+        slt_path=slt_path,
+        sst_dir=sst_dir,
+        max_rollout_steps=1,
+    )
+    in_batch, _, _ = ds[0]
+    statics = in_batch.static_vars
+    assert "sst" in statics
+    sst = statics["sst"]
+    assert sst.shape == (180, 360)
+    assert torch.isfinite(sst).all()
+
+    # Verify grid equality with invariants
+    z = statics["z"]
+    lsm = statics["lsm"]
+    slt = statics["slt"]
+    assert sst.shape == z.shape == lsm.shape == slt.shape == (180, 360)
+
+    # Ocean physical range check: [271, 310] K
+    ocean_mask = lsm < 0.5
+    ocean_sst = sst[ocean_mask]
+    assert ocean_sst.min().item() >= 270.0, f"Ocean SST min {ocean_sst.min().item()} < 270 K"
+    assert ocean_sst.max().item() <= 310.0, f"Ocean SST max {ocean_sst.max().item()} > 310 K"

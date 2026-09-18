@@ -1,0 +1,4 @@
+# Ignore downloaded large NetCDF datasets (> 1 MB) per protocol §9
+*.nc
+!slt_1deg.nc
+sst/*.nc
