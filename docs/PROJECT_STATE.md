@@ -1,7 +1,7 @@
 # Living Project State
 
 **Last Updated:** 2026-09-18  
-**Active Phase:** Campaign `science-baseline` Phase H complete (Tasks H1, H2, H3 implemented); ready for Phase J (Evaluation & Ruler).  
+**Active Phase:** Campaign `science-baseline` Phase H complete (Tasks H1, H2, H3, H4 implemented); ready for Phase J (Evaluation & Ruler).  
 
 ---
 
@@ -9,7 +9,7 @@
 
 > **Implement Task J1 (Wheeler-Hendon RMM Reconstruction): launch Phase J evaluation and metric ruler.**
 
-**Justification:** Phase H objective refinements are complete: Task H1 resolved primary scientific defect R1 (gradient starving of moisture variables), Task H2 resolved R6 (flat-vector FFT replaced with per-variable 2D spatial spectrum), and Task H3 resolved R2 (unsupervised $R \to 0$ penalty replaced with ERA5-supervised $E - P$ loss with surface-pressure column masking). All loss terms are tested and documented. Next action moves into Phase J for rigorous RMM evaluation metrics.
+**Justification:** Phase H objective and parameter refinements are complete: Task H1 resolved primary scientific defect R1 (gradient starving of moisture variables), Task H2 resolved R6 (flat-vector FFT replaced with per-variable 2D spatial spectrum), Task H3 resolved R2 (unsupervised $R \to 0$ penalty replaced with ERA5-supervised $E - P$ loss with surface-pressure column masking), and Task H4 audited the trainable surface across four modes (`warmup`, `lora`, `rollout`, `physics`), replaced rollout clamps with Aurora native positivity clamping (`tcwv`, `q`), and protected validation against rollout OOM via `torch.no_grad()`. Next action moves into Phase J for rigorous RMM evaluation metrics.
 
 *Campaign Synthesis & Next Steps:* See [`docs/campaigns/science-baseline/README.md`](campaigns/science-baseline/README.md) for full campaign plan and execution roadmap.
 
@@ -19,6 +19,7 @@
 
 | Component / Subsystem | Status | Evidence / Reference | Notes |
 | :--- | :--- | :--- | :--- |
+| **Trainable Surface & Clamping** | **GREEN** | Task H4 (`model.py`, `trainer.py`, `unified.yaml`, `test_freeze.py`, `test_rollout.py`) | Parameter budgets audited across 4 modes on 1.3B `AuroraPretrained`: `warmup` (98,352 params / 0.0078%), `lora`/`rollout`/`physics` (2,949,168 params / 0.2342%); Aurora constructor clamping active for `positive_surf_vars=("tcwv",)` and `positive_atmos_vars=("q",)` with `clamp_at_first_step=False`; non-vendor physical bounds retained in `_ROLLOUT_CLAMP` (`msl`, `2t`, `10u`, `10v`, `ttr`); `validate()` wrapped in `torch.no_grad()` (bitwise identical loss at $k=1$, 17.25× peak VRAM reduction at $k=4$, preventing Phase K OOM); parameter name parity tests passing. |
 | **Moisture Conservation (`MoistureBudgetLoss`)** | **GREEN** | Task H3 (`loss.py`, `dataset.py`, `test_loss.py`, `test_dataset_loader.py`) | Supervised column moisture budget: penalises $\|R - (E - P)_{\text{ERA5}}\|$ over tropics ($\pm 20^\circ$); column integral masked at surface pressure $p_s$ (levels with $p > p_s$ excluded); ERA5 downward-positive convention verified ($E = -\text{mslhf}/L_v \times 86400$, $P = \text{tp6h} \times 4000$); `tp6h` and `mslhf` added to `SURFACE_VAR_MAP` as loss targets only; disabled by default across modes (`weight: 0.0`); Step-1 diagnostic measured on 1980-01 ERA5 fields ($r = 0.3746$, ratio $2.3511$, spatial pattern $r = 0.8131$) confirming numerics within ~2x; defect R2 regression proof verified in `test_loss.py`. |
 | **Spectral Loss (per-variable, 2-D)** | **GREEN** | Task H2 (`loss.py`, `trainer.py`, `test_loss.py`) | `SpectralLoss` rewritten: `rfft2` over `(lat, lon)` only per variable per level; normalised with G3 constants; `w_v` weights matching H1; Hann latitude window; amplitude-spectrum formulation (`\|FFT(x̂)\| − \|FFT(x)\|`); disabled by default (`enabled: false`); pre-H2 flat-vector defect (R6) documented and corrected. |
 | **Grid Loss Normalisation & Weighting** | **GREEN** | Task H1 (`loss.py`, `trainer.py`, `configs/unified.yaml`, `test_loss.py`) | Normalised using 1980–2015 Welford stats; separate multiplicative area weighting $a(\phi)$ and tropical mask $m(\phi)$; pressure-delta vertical weighting $c_\ell$; config-locked $w_v$ resolving R1 ($msl:q$ gradient ratio changed from 5.8M:1 to 0.25:1); per-variable losses emitted. |
@@ -29,15 +30,15 @@
 | **Native Resolution Ingestion** | **GREEN** | Task G1 (`src/aurora_mjo/dataset.py`, `trainer.py`) | Both upsamplers deleted; 1° grid coordinates dynamically loaded from CFS archive; slt regridded to 1° (`data/static/slt_1deg.nc`); forward pass finite. |
 | **Package Structure** | **GREEN** | Task C1 (`src/aurora_mjo/`) | First-party package installed via Hatchling; third-party `aurora` collision resolved. |
 | **Dependency Management** | **GREEN** | Task A1 (`pyproject.toml`, `uv.lock`) | `uv` is the sole manager; PyTorch 2.5.1+cu121 links correctly with CUDA on Perlmutter. |
-| **Verification Gate** | **GREEN** | Task A3 / G1 / G2 / G5 / H1 / H2 (`scripts/check.py`) | Stdlib runner checking lockfile, ruff lint/format, pyrefly types, and pytest (all PASS). |
+| **Verification Gate** | **GREEN** | Task A3 / G1 / G2 / G5 / H1 / H2 / H4 (`scripts/check.py`) | Stdlib runner checking lockfile, ruff lint/format, pyrefly types, and pytest (all PASS). |
 | **Type Checking Ratchet** | **GREEN** | Task A3 / `pyproject.toml` | `pyrefly 1.2.0` active. Ratchet exclusion list holds 8 entries; entries come off, never on. |
-| **Test Suite Coverage** | **GREEN** | Tasks D1–D3, E1–E2, G1–G5, H1–H3 | **117 passed**, **0 xfailed**, **9 deselected** (needs data/gpu/slow) on default CI path; **126 total tests**. |
+| **Test Suite Coverage** | **GREEN** | Tasks D1–D3, E1–E2, G1–G5, H1–H4 | **122 passed**, **0 xfailed**, **9 deselected** (needs data/gpu/slow) on default CI path; **131 total tests**. |
 | **Environment Guards** | **GREEN** | Task E1 (`src/aurora_mjo/env.py`) | `HDF5_USE_FILE_LOCKING=FALSE` auto-set; zero-fallbacks replaced with `StaticVarLoadError`. |
 | **Config Validation** | **GREEN** | Task E2 / G2 / H1 (`src/aurora_mjo/config.py`) | Pydantic v2 boundary validation; validates GridLossConfig fields (`weight`, `level_weighting`, `variable_weights`). |
 | **RMM Core Extraction** | **GREEN** | Task C3 (`src/aurora_mjo/rmm/`) | Pure math extracted into `compute.py` and `evaluate.py`; scripts serve as thin CLI. |
 | **SLURM Automation** | **GREEN** | Task E3 (`slurm_scripts/`) | All scripts unified under `uv run --frozen`; `env.sh` extracted; signal traps preserved. |
 | **July 2026 Run Forensics** | **RESOLVED** | Task B2 / [`docs/findings/2026-09-zeroed-statics.md`](findings/2026-09-zeroed-statics.md) | Logs purged on scratch, but structural proof shows past runs did not run on zero statics. |
-| **Documentation Suite** | **GREEN** | Task F1 / G5 / H1 (`README`, `SPEC`, `SETUP`, etc.) | Prognostic grid loss specification and Lesson 8 documented in `SPEC.md`. |
+| **Documentation Suite** | **GREEN** | Task F1 / G5 / H1 / H4 (`README`, `SPEC`, `SETUP`, etc.) | Trainable surface specification, parameter tables, and clamping documented in `SPEC.md`. |
 | **Perlmutter Acceptance** | **GREEN** | Task F2 (`results/F2_result.md`) | Fresh scratch clone; gate green; 5 data tests pass; 2 GPU tests pass; smoke test bitwise-identical to B1; SLURM debug job completed exit 0. |
 
 ---
@@ -48,27 +49,28 @@ Measured locally via `uv run pytest --collect-only`:
 
 | Category / Marker | Count | Execution Context | Verified In Tasks |
 | :--- | :--- | :--- | :--- |
-| **Default CI Path** (offline, synthetic CPU) | **117** (117 pass, 0 xfail) | Local dev, GitHub Actions (`ubuntu-latest`) | A3, D1–D3, E1–E2, G1–G5, H1–H3 |
+| **Default CI Path** (offline, synthetic CPU) | **122** (122 pass, 0 xfail) | Local dev, GitHub Actions (`ubuntu-latest`) | A3, D1–D3, E1–E2, G1–G5, H1–H4 |
 | **`needs_data`** (requires CFS archive) | 6 | NERSC Perlmutter login / compute node | D2, D3, E1, G1, G5 |
 | **`needs_gpu`** (requires CUDA device) | 3 | NERSC Perlmutter GPU compute node | D2, G2 |
 | **`slow`** (rollout simulation > 5s) | 1 | NERSC Perlmutter GPU compute node | D2 |
 | **`live`** (external network / HF Hub) | 0 | N/A (all offline) | D2 |
-| **Total Test Suite** | **126** | Full suite passes across environments | F1, G1–G5, H1–H3 |
+| **Total Test Suite** | **131** | Full suite passes across environments | F1, G1–G5, H1–H4 |
 
 ---
 
 ## 4. Open Checklist
 
+- [x] **Trainable-Surface Audit, Native Clamping, Validation `no_grad` (Task H4):** Audited 4 modes on 1.3B `AuroraPretrained` (`warmup`: 98,352 params; `lora`/`rollout`/`physics`: 2,949,168 params); replaced `tcwv`/`q` clamps with Aurora native clamping (`clamp_at_first_step=False`); wrapped validation in `torch.no_grad()` (17.25× VRAM reduction at $k=4$); parameter parity tests passing.
 - [x] **Persisted SST Static Boundary Condition (Task G5 / Q-20):** Sourced ERA5 SST, regridded to 1°, land filled with zonal-mean (worst σ = 1.745), Welford normalisation computed (mean 285.5980 K, std 11.7613 K), verified bitwise identical rollout persistence across 120 steps, static embedding unfreezing hook configured (+16,384 params on 1.3B model).
 - [x] **Compute True Normalisation Statistics (OPEN-01):** Computed true statistics over 1980–2015 at 1° native resolution via Welford parallel reduction; saved to `configs/norm_stats_1980_2015.yaml`; updated `configs/unified.yaml`; migrated to `surf_stats` constructor hook; `test_placeholder_norm_stats_guard` passing (Task G3).
 - [x] **Relocate `slt_data.nc` (Q-07 / Q-17):** Regridded categorical soil type to 1° via nearest neighbour; saved and committed to `data/static/slt_1deg.nc` (~19.6 kB); removed purgeable scratch dependency; updated `configs/unified.yaml`.
 - [x] **Model Scale Benchmark (Task G2):** Mapped `model_type: full` to `AuroraPretrained` (1.3B Swin3D backbone); retired `huge`; measured exact parameter counts (1,256,365,744 base); measured peak memory (14.69 GiB) and step time (221 ms) at 1°; Lesson 6 constraint dissolved.
 - [ ] **Enable GitHub Branch Protection (Human Action):** Configure GitHub repository rulesets for `main` requiring pull requests and `scripts/check.py` CI status check approval.
 - [ ] **Address Config Immutability Wart (Observation from E2):** Refactor `cli_support.py:auto_scale_memory` to remove post-validation dictionary mutation.
-- [ ] **Scientific Campaign: Rollout & Loss Dynamics:**
-  - *Finding 3:* Clamp fed-back predictions in autoregressive rollouts before feeding into subsequent input windows.
-  - *Finding 5:* Resolve parameter freezing in physics-informed mode so moisture-budget loss can update relevant decoders.
-  - *Finding 6:* Unfreeze or recalibrate `msl` output head so predicted fields match physical surface pressure scales.
+- [x] **Scientific Campaign: Rollout & Loss Dynamics (Resolved in Phase H):**
+  - *Finding 3 (Autoregressive clamping):* Implemented native positivity clamping on `tcwv` and `q`, with physical bounds on `msl`, `2t`, `10u`, `10v`, and `ttr` in `_ROLLOUT_CLAMP`.
+  - *Finding 5 (Physics mode trainable surface):* Configured `physics` mode with identical trainable surface to `lora` and `rollout`, enabling parameter adaptation.
+  - *Finding 6 (MSL output head):* `surf_heads.msl` unfrozen across all training modes.
 
 ---
 

@@ -210,7 +210,76 @@ Aurora predicts prognostic outputs in physical units. Both predictions and groun
 
 ---
 
-## 8. Promoted Durable Findings: The Eight Lessons
+## 8. Model Architecture, Trainable Surface & Parameter Budgets (Task H4)
+
+### 8.1 Model Scale (`model_type: full`)
+The operational model uses `AuroraPretrained` (1.3B Swin3D transformer backbone), loading weights pre-trained on diverse Earth-system reanalyses. The patch size is $4 \times 4$ horizontally with 13 vertical levels and 2 historical timesteps.
+
+### 8.2 Parameter Budgets Across Modes
+The training campaign is structured into four distinct modes across four sequential training stages:
+1. **`warmup` (Stage 0):** Zero LoRA adapters. The 1.3B backbone is entirely frozen. Only newly injected surface variables (`tcwv`, `ttr`) and static boundary (`sst`) patch embeddings, their corresponding decoder output heads, and the `msl` decoder head are trainable.
+2. **`lora` (Stage 1):** Low-Rank Adaptation (LoRA) attached to attention projection layers in all Swin3D blocks, in addition to the warmup surface.
+3. **`rollout` (Stage 2):** Autoregressive rollout multi-step fine-tuning ($k > 1$) with identical trainable surface to `lora`.
+4. **`physics` (Stage 3):** Rollout fine-tuning with physics loss constraints active (`moisture_budget`).
+
+#### Parameter Counts (`model_type: full` / `AuroraPretrained`):
+| Mode | Total Parameters | Trainable Parameters | Frozen Parameters | Trainable % |
+| :--- | :--- | :--- | :--- | :--- |
+| **`warmup`** | 1,256,382,128 | **98,352** | 1,256,283,776 | **0.0078%** |
+| **`lora`** | 1,259,232,944 | **2,949,168** | 1,256,283,776 | **0.2342%** |
+| **`rollout`** | 1,259,232,944 | **2,949,168** | 1,256,283,776 | **0.2342%** |
+| **`physics`** | 1,259,232,944 | **2,949,168** | 1,256,283,776 | **0.2342%** |
+
+*(Note: If static SST was excluded, the warmup trainable count would be 81,968 parameters across 5 modules. Task G5 added `surf_token_embeds.weights.sst` adding 16,384 parameters, bringing the total to 98,352 parameters).*
+
+#### Module Breakdown of Trainable Surface:
+1. **Warmup Surface (98,352 parameters across 6 parameter tensors):**
+   - Injected Encoder Patch Embeddings (49,152 parameters):
+     - `backbone.encoder.surf_token_embeds.weights.sst` (shape `[1024, 16]`, 16,384 params)
+     - `backbone.encoder.surf_token_embeds.weights.tcwv` (shape `[1024, 16]`, 16,384 params)
+     - `backbone.encoder.surf_token_embeds.weights.ttr` (shape `[1024, 16]`, 16,384 params)
+   - Injected / Recalibrated Decoder Heads (49,200 parameters):
+     - `backbone.decoder.surf_heads.msl.weight` (`[16, 1024]`, 16,384) + `bias` (`[16]`, 16) = 16,400 params
+     - `backbone.decoder.surf_heads.tcwv.weight` (`[16, 1024]`, 16,384) + `bias` (`[16]`, 16) = 16,400 params
+     - `backbone.decoder.surf_heads.ttr.weight` (`[16, 1024]`, 16,384) + `bias` (`[16]`, 16) = 16,400 params
+2. **LoRA Adapters (2,850,816 parameters across 96 parameter tensors):**
+   - Attached to `WindowAttention.qkv` and `WindowAttention.proj` in Swin3D blocks throughout encoder and decoder.
+   - For each adapted linear layer: rank $r=8$, scaling $\alpha=8$ (scaling factor $\alpha/r = 1.0$).
+   - Total LoRA parameter count: $98,352 \text{ (warmup)} + 2,850,816 \text{ (LoRA)} = 2,949,168$ parameters.
+
+### 8.3 LoRA Configuration & Per-Step Adapter Option
+- **Current Baseline Configuration:**
+  - `rank: 8`, `lora_alpha: 8`, `lora_dropout: 0.05`
+  - `lora_mode: "single"`: A single shared adapter is evaluated across all autoregressive rollout steps.
+  - Adapted module targets: query/key/value projections (`qkv`) and output projection (`proj`) of windowed multi-head self-attention.
+- **Later-Campaign Candidate (Per-Step Adapters):**
+  - Aurora 1.8.0 provides built-in support for time-step-conditioned LoRA adapters (`lora_mode: "step"` up to `lora_steps: 40`), allocating separate LoRA parameters for individual rollout lead times.
+  - In this baseline campaign, `lora_mode: "single"` is strictly preserved to establish an unconfounded baseline without swelling the parameter count ($40 \times 2.85\text{M} \approx 114\text{M}$ params) or altering rollout step mechanics.
+
+### 8.4 Autoregressive Clamping: Vendor vs. In-Tree Guards
+To prevent non-physical runaway states during multi-step rollouts ($k > 1$):
+1. **Aurora Native Clamping:**
+   - Total Column Water Vapor: `positive_surf_vars=("tcwv",)` clamps predicted surface moisture to $\ge 0$.
+   - Specific Humidity: `positive_atmos_vars=("q",)` clamps vertical humidity levels to $\ge 0$.
+   - First-Step Guard: `clamp_at_first_step=False` during training. In Stage 0 (`warmup`), newly initialized heads (`tcwv`, `ttr`) output mean-zero predictions, yielding negative values across ~50% of the domain on step 1. Hard clamping on step 1 zeroes out backward gradients ($\partial \text{clamp}(x, 0)/\partial x = 0$ for $x < 0$), preventing heads from learning. Setting `clamp_at_first_step=False` allows full gradient propagation.
+2. **In-Tree Physical Rollout Clamping (`_ROLLOUT_CLAMP`):**
+   - Surface pressure (`msl` proxy): $[50000, 110000]\text{ Pa}$
+   - 2-meter air temperature (`2t`): $[180, 340]\text{ K}$
+   - Surface wind velocity (`10u`, `10v`): $[-100, 100]\text{ m s}^{-1}$
+   - Outgoing longwave radiation (`ttr`): $[-450, 0]\text{ W m}^{-2}$ (downward-negative convention)
+   These guards lack vendor constructor hooks in Aurora and are retained in `_advance_batch` to prevent explosive numerical instabilities during multi-week rollouts.
+
+### 8.5 Validation Optimization (`torch.no_grad()`)
+Validation loops in `Trainer.validate()` are wrapped in `torch.no_grad()`.
+- **Loss Equivalence at $k=1$:** Validation loss is bitwise identical under `torch.no_grad()` vs `torch.enable_grad()` (measured: $543,162.875000$ vs $543,162.875000$).
+- **Memory Scaling at $k=4$:** In multi-step autoregressive rollout validation, disabling gradient tracking prevents retaining 4 full computational graphs in VRAM. Measured peak memory on Perlmutter A100:
+  - `torch.enable_grad()`: 21,395.97 MiB
+  - `torch.no_grad()`: 1,240.42 MiB
+  - **Reduction factor: 17.25×** (saving >20 GiB VRAM), entirely eliminating the projected Phase K validation OOM risk.
+
+---
+
+## 9. Promoted Durable Findings: The Eight Lessons
 
 The following lessons were established through real failures on Perlmutter:
 
@@ -255,7 +324,7 @@ The following lessons were established through real failures on Perlmutter:
 
 ---
 
-## 9. Upstream Traps & Architectural Guards
+## 10. Upstream Traps & Architectural Guards
 
 | Upstream Trap | Architectural Failure Mode | Enforcing Code Guard | Verified In Test |
 | :--- | :--- | :--- | :--- |
@@ -267,18 +336,17 @@ The following lessons were established through real failures on Perlmutter:
 
 ---
 
-## 10. Non-Goals
+## 11. Non-Goals
 
 The following areas are explicitly **out of scope** for the current architecture:
-1. **Unclamped Rollout Backprop (Finding 3):** Autoregressive rollouts currently do not clamp predictions before feeding them back into inputs. Resolving this requires deliberate scientific modeling in a future campaign.
-2. **Physics Loss Parameter Unfreezing (Finding 5):** In physics-informed mode, the backbone is frozen, preventing decoder heads from learning moisture-budget gradients. Addressing this requires a human scientific decision on trainable parameter subsets.
-3. **Msl Output Head Unfreezing (Finding 6):** The `msl` prediction head remains calibrated to true MSL statistics.
-4. **Prognostic Ocean / SST Dynamics (Task G5 Limitation):** Sea surface temperature is treated as an initial-value persisted static boundary condition held fixed across each forecast rollout. Simulating dynamic ocean response, mixed layer thermodynamics, ocean-atmosphere coupling, or damped-persistence relaxation is explicitly out of scope for this baseline campaign.
-5. **Damped-Persistence SST:** Relaxing the SST anomaly toward climatology with lead time is deferred to a later-campaign comparison; simple persistence is implemented first.
+1. **Full Backpropagation Through Time (`backprop: "full"`):** Multi-step rollouts use detached pushforward (`detach=True`), detaching each step before feeding into the next step. Full BPTT is unexercised in this baseline campaign.
+2. **Prognostic Ocean / SST Dynamics (Task G5 Limitation):** Sea surface temperature is treated as an initial-value persisted static boundary condition held fixed across each forecast rollout. Simulating dynamic ocean response, mixed layer thermodynamics, ocean-atmosphere coupling, or damped-persistence relaxation is explicitly out of scope for this baseline campaign.
+3. **Damped-Persistence SST:** Relaxing the SST anomaly toward climatology with lead time is deferred to a later-campaign comparison; simple persistence is implemented first.
+4. **Time-Step-Conditioned LoRA Adapters:** Exploring per-step LoRA adapters (`lora_mode: "step"` with `lora_steps: 40`) is deferred to a later campaign; single shared adapter (`lora_mode: "single"`) is the baseline.
 
 ---
 
-## 11. Open Items
+## 12. Open Items
 
 | Item ID | Description | Impact / Blocks | Default / Current Mitigation |
 | :--- | :--- | :--- | :--- |

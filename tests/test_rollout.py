@@ -340,3 +340,77 @@ def test_rollout_gpu_execution() -> None:
         batch_in_epoch=0,
     )
     assert items["total"] > 0.0
+
+
+def test_validation_runs_under_no_grad() -> None:
+    """Verify that Trainer.validate() executes strictly under torch.no_grad() (Task H4)."""
+    model = StubModel()
+    rollout_cfg = {
+        "enabled": True,
+        "start_steps": 1,
+        "max_steps": 1,
+        "step_loss_weighting": "uniform",
+        "backprop": "full",
+    }
+    trainer = _make_minimal_trainer(model, rollout_cfg)
+    in_batch, target_dict_list = _make_synthetic_batch_and_targets(b=1, h=32, w=64, k=1)
+    trainer.val_loader = [(in_batch, target_dict_list)]  # type: ignore[assignment]
+
+    # Wrap _compute_loss to inspect grad_enabled state at execution time
+    original_compute_loss = trainer._compute_loss
+    grad_enabled_during_val: list[bool] = []
+
+    def _spy_compute_loss(in_b, tgt_list, epoch=1):
+        grad_enabled_during_val.append(torch.is_grad_enabled())
+        return original_compute_loss(in_b, tgt_list, epoch=epoch)
+
+    trainer._compute_loss = _spy_compute_loss  # type: ignore[assignment]
+    val_loss = trainer.validate(epoch=1)
+
+    assert len(grad_enabled_during_val) > 0, "validate() did not execute _compute_loss"
+    assert not any(grad_enabled_during_val), (
+        f"Expected torch.is_grad_enabled() to be False during validate(), "
+        f"got {grad_enabled_during_val}"
+    )
+    assert torch.isfinite(torch.tensor(val_loss)), "validate() loss must be finite"
+
+
+def test_validation_loss_unchanged_with_no_grad_at_k1() -> None:
+    """Verify validation loss at k=1 is bitwise identical under no_grad vs with_grad (H4)."""
+    model = StubModel()
+    rollout_cfg = {
+        "enabled": True,
+        "start_steps": 1,
+        "max_steps": 1,
+        "step_loss_weighting": "uniform",
+        "backprop": "full",
+    }
+    trainer = _make_minimal_trainer(model, rollout_cfg)
+    in_batch, target_dict_list = _make_synthetic_batch_and_targets(b=1, h=32, w=64, k=1)
+
+    with torch.no_grad():
+        losses_no_grad = trainer._compute_loss(in_batch, target_dict_list, epoch=1)
+
+    with torch.enable_grad():
+        losses_with_grad = trainer._compute_loss(in_batch, target_dict_list, epoch=1)
+
+    val_no_grad = losses_no_grad["total"].item()
+    val_with_grad = losses_with_grad["total"].item()
+    assert (
+        abs(val_no_grad - val_with_grad) < 1e-6
+    ), f"Loss mismatch at k=1: no_grad={val_no_grad} vs with_grad={val_with_grad}"
+
+
+def test_rollout_clamp_vendor_replacement() -> None:
+    """Verify _ROLLOUT_CLAMP delegates tcwv/q to vendor while retaining others (Task H4)."""
+    from aurora_mjo.trainer import _ROLLOUT_CLAMP
+
+    # 1. Vendor-delegated variables are removed
+    assert "tcwv" not in _ROLLOUT_CLAMP, "tcwv must be delegated to Aurora positive_surf_vars"
+    assert "q" not in _ROLLOUT_CLAMP, "q must be delegated to Aurora positive_atmos_vars"
+
+    # 2. Non-vendor physical guards are strictly retained
+    expected_retained = {"msl", "2t", "10u", "10v", "ttr"}
+    assert (
+        set(_ROLLOUT_CLAMP.keys()) == expected_retained
+    ), f"Expected retained clamp variables {expected_retained}, got {set(_ROLLOUT_CLAMP.keys())}"
