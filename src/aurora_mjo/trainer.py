@@ -122,19 +122,10 @@ def _build_scheduler(optimizer, cfg: dict, optim_steps_per_epoch: int):
 # ---------------------------------------------------------------------------
 
 
-def _extract_batch_outputs(pred_batch, target_dict, device):
-    pred_parts, tgt_parts = [], []
-    for attr in ("surf_vars", "atmos_vars"):
-        if hasattr(pred_batch, attr):
-            for k, v in getattr(pred_batch, attr).items():
-                if k in target_dict:
-                    pred_parts.append(v.to(device))
-                    tgt_parts.append(target_dict[k].to(device))
-    if not pred_parts:
-        return None, None
-    pred_tensor = torch.cat([t.reshape(t.shape[0], -1) for t in pred_parts], dim=-1)
-    tgt_tensor = torch.cat([t.reshape(t.shape[0], -1) for t in tgt_parts], dim=-1)
-    return pred_tensor, tgt_tensor
+# _extract_batch_outputs was deleted in H2: SpectralLoss now receives
+# pred_batch + target_dict directly via forward_per_var and handles
+# per-variable iteration internally.  Grep confirms it had no other callers.
+
 
 
 def _align_shapes(pred_t, tgt_t):
@@ -376,7 +367,12 @@ class Trainer:
 
         spec_cfg = loss_cfg.get("spectral", {})
         self.spectral_loss = (
-            SpectralLoss().to(device) if spec_cfg.get("enabled", False) else None
+            SpectralLoss(
+                lat_coords=lat_coords,
+                variable_weights=grid_cfg.get("variable_weights", None),
+            ).to(device)
+            if spec_cfg.get("enabled", False)
+            else None
         )
         self.spectral_weight = float(spec_cfg.get("weight", 0.0))
 
@@ -719,11 +715,9 @@ class Trainer:
                     )
 
         if self.spectral_loss is not None and self.spectral_weight > 0:
-            pred_t, tgt_t = _extract_batch_outputs(pred_batch, target_dict, self.device)
-            if pred_t is not None:
-                out["spectral"] = self.spectral_weight * self.spectral_loss(
-                    pred_t, tgt_t
-                )
+            out["spectral"] = self.spectral_weight * self.spectral_loss.forward_per_var(
+                pred_batch, target_dict, self.device
+            )
 
         if (
             self.use_mjo_head_loss
