@@ -144,24 +144,19 @@ def _align_shapes(pred_t, tgt_t):
 
 
 
-# FIX 4 (AURORA_MJO_GAMEPLAN §Finding 3 / FIX 4, phase-3 LoRA rollout only):
-# `_advance_batch` splices the model's own prediction straight into the next
-# step's input history with no clamping, bypassing Aurora's built-in
-# `apply_rollout_input_clipping`. From a cold start the freshly-initialized
-# ttr/tcwv (and, post-FIX-2/6, msl) heads emit garbage; that garbage becomes
-# an OOD input for step 2, which goes non-finite. Clamp every fed-back
-# prediction to a generous physical range before it re-enters the model.
-# Bounds are physical (pre-normalization) units; tune if your convention
-# differs. Only variables present in this table are clamped - everything
-# else passes through unchanged.
+# FIX 4 & Task H4 (00_CONTEXT.md R7.3, H4_trainable_surface.md):
+# Positivity clamping for 'tcwv' and 'q' is delegated to Aurora's native
+# constructor arguments: positive_surf_vars=("tcwv",) and positive_atmos_vars=("q",).
+# For variables without a vendor equivalent in Aurora (msl, 2t, 10u, 10v, ttr),
+# generous physical range guards are retained here so that fed-back predictions
+# in multi-step rollouts do not introduce out-of-distribution inputs.
+# Bounds are in physical (pre-normalization) units.
 _ROLLOUT_CLAMP = {
     "msl": (3.0e4, 1.1e5),
     "2t": (150.0, 350.0),
     "10u": (-120.0, 120.0),
     "10v": (-120.0, 120.0),
     "ttr": (-600.0, 50.0),
-    "tcwv": (0.0, 120.0),
-    "q": (0.0, 0.1),
 }
 
 
@@ -1198,6 +1193,12 @@ class Trainer:
 
     @torch.no_grad()
     def validate(self, epoch: int) -> float:
+        """Evaluate model on the validation split under torch.no_grad().
+        
+        Guarantees that autograd graphs are not retained across rollout steps,
+        preventing activation memory OOM in multi-step evaluation (Task H4).
+        """
+        assert not torch.is_grad_enabled(), "validate() must run under torch.no_grad()"
         self.model.eval()
         val_loss, n, skipped = 0.0, 0, 0
         logged_bad = False

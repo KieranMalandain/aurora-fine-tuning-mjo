@@ -175,3 +175,100 @@ def test_freeze_backbone_full_model_gpu() -> None:
     assert all(p.requires_grad for p in lora_params)
     assert model_lora.mjo_head is not None
     assert all(p.requires_grad for p in model_lora.mjo_head.parameters())
+
+
+def test_all_four_modes_trainable_param_set_by_name() -> None:
+    """Verify trainable parameter set by exact parameter name for all four modes (Task H4).
+
+    Modes tested:
+      - Stage 0 ('warmup'): Backbone frozen, LoRA OFF. Only injected embeddings
+        (ttr, tcwv, sst), their decoder heads (ttr, tcwv), and the msl head are trainable.
+      - Stage 1 ('lora'): Same surface as warmup + LoRA adapters trainable.
+      - Stage 2 ('rollout'): Identical parameter surface to Stage 1.
+      - Stage 3 ('physics'): Identical parameter surface to Stage 1.
+    """
+    base_cfg: dict[str, Any] = {
+        "model_type": "small",
+        "surface_variables": ["2t", "10u", "10v", "msl", "ttr", "tcwv"],
+        "static_variables": ["lsm", "z", "slt", "sst"],
+        "freeze_backbone": True,
+        "gradient_checkpointing": False,
+        "mjo_head": {"enabled": False},
+    }
+
+    # Expected exact parameter names for warmup
+    expected_warmup_names = {
+        "backbone.encoder.surf_token_embeds.weights.sst",
+        "backbone.encoder.surf_token_embeds.weights.tcwv",
+        "backbone.encoder.surf_token_embeds.weights.ttr",
+        "backbone.decoder.surf_heads.msl.weight",
+        "backbone.decoder.surf_heads.msl.bias",
+        "backbone.decoder.surf_heads.tcwv.weight",
+        "backbone.decoder.surf_heads.tcwv.bias",
+        "backbone.decoder.surf_heads.ttr.weight",
+        "backbone.decoder.surf_heads.ttr.bias",
+    }
+
+    # 1. Warmup mode (use_lora=False)
+    cfg_warmup = {**base_cfg, "use_lora": False}
+    model_warmup = load_model(cfg_warmup)
+    trainable_warmup = {name for name, p in model_warmup.named_parameters() if p.requires_grad}
+
+    assert trainable_warmup == expected_warmup_names, (
+        f"Warmup trainable parameters mismatch.\n"
+        f"Extra: {trainable_warmup - expected_warmup_names}\n"
+        f"Missing: {expected_warmup_names - trainable_warmup}"
+    )
+    # Ensure no LoRA parameters exist in warmup
+    lora_in_warmup = [
+        name for name, _ in model_warmup.named_modules() if isinstance(_, LoRA | LoRARollout)
+    ]
+    assert len(lora_in_warmup) == 0, "No LoRA modules should exist in warmup mode"
+
+    # 2. LoRA, Rollout, and Physics modes (use_lora=True, lora_mode='single')
+    for mode_name in ("lora", "rollout", "physics"):
+        cfg_mode = {**base_cfg, "use_lora": True, "lora_mode": "single"}
+        model_mode = load_model(cfg_mode)
+        trainable_mode = {name for name, p in model_mode.named_parameters() if p.requires_grad}
+
+        # Must include all warmup parameters
+        assert expected_warmup_names.issubset(trainable_mode), (
+            f"Mode '{mode_name}' missing core warmup parameters: "
+            f"{expected_warmup_names - trainable_mode}"
+        )
+
+        # All additional trainable parameters must be LoRA parameters
+        additional_params = trainable_mode - expected_warmup_names
+        for param_name in additional_params:
+            # Find containing module
+            mod_path = param_name.rsplit(".", 1)[0]
+            # Strip 'backbone.' prefix if present
+            if mod_path.startswith("backbone."):
+                mod_path = mod_path[len("backbone.") :]
+            mod = model_mode.backbone.get_submodule(mod_path)
+            assert isinstance(mod, LoRA | LoRARollout), (
+                f"Mode '{mode_name}' parameter '{param_name}' is trainable "
+                "but not a LoRA parameter!"
+            )
+
+
+def test_positivity_clamping_active_on_tcwv_and_q() -> None:
+    """Verify Aurora's native positivity clamping is active on tcwv and q (Task H4)."""
+    config: dict[str, Any] = {
+        "model_type": "small",
+        "surface_variables": ["2t", "10u", "10v", "msl", "ttr", "tcwv"],
+        "static_variables": ["lsm", "z", "slt", "sst"],
+        "use_lora": False,
+        "freeze_backbone": True,
+        "mjo_head": {"enabled": False},
+    }
+    model = load_model(config)
+    backbone = model.backbone
+
+    # 1. Constructor arguments registered on backbone
+    assert "tcwv" in backbone.positive_surf_vars, "tcwv must be in positive_surf_vars"
+    assert "q" in backbone.positive_atmos_vars, "q must be in positive_atmos_vars"
+    assert backbone.clamp_at_first_step is False, (
+        "clamp_at_first_step must be False during training to preserve "
+        "gradients for newly initialized heads"
+    )

@@ -270,8 +270,17 @@ def freeze_backbone(
 ) -> None:
     """Freeze the Aurora backbone except for LoRA adapters and new-variable embeddings.
 
-    Calling strategy
-    ----------------
+    Calling strategy (H4 / 02_SCIENTIFIC_CONTRACT.md §5.3)
+    ------------------------------------------------------
+    - Stage 0 ('warmup', use_lora=False):
+      Full backbone is frozen. Only injected patch embeddings (ttr, tcwv, sst),
+      injected decoder heads (ttr, tcwv), and the msl decoder head (FIX 6) are
+      trainable. LoRA adapters are off (0 parameters). This allows newly initialized
+      channels to reach a stable operating point without adapting the foundation backbone.
+    - Stages 1–3 ('lora', 'rollout', 'physics', use_lora=True):
+      Same trainable surface as Stage 0 plus all LoRA adapter weights (lora_A, lora_B)
+      in WindowAttention.qkv and WindowAttention.proj.
+
     1. Freeze **everything** in the backbone with ``requires_grad = False``.
     2. Unfreeze LoRA adapter parameters (``lora_A``, ``lora_B``) when
        ``use_lora=True``.  These are identified by their containing module
@@ -284,6 +293,7 @@ def freeze_backbone(
        Note: Static variables share ``surf_token_embeds`` with surface variables.
     4. Unfreeze the decoder heads of *newly injected* surface variables. Static
        variables do NOT have decoder heads.
+    5. Unfreeze the ``msl`` decoder head (FIX 6) to re-calibrate for surface pressure.
 
     Args:
         backbone: The Aurora model instance.
@@ -442,12 +452,19 @@ def load_model(config: dict, norm_stats: dict | None = None) -> AuroraMJO:
                 m, s = stats["mean"], stats["std"]
                 print(f"   - {var_name} (surf_stats): mean={m:.4f}, std={s:.4f}")
 
+    positive_surf_vars = tuple(config.get("positive_surf_vars", ("tcwv",)))
+    positive_atmos_vars = tuple(config.get("positive_atmos_vars", ("q",)))
+    clamp_at_first_step = bool(config.get("clamp_at_first_step", False))
+
     backbone = model_class(
         surf_vars=extended_surf_vars,
         static_vars=static_vars,
         use_lora=config["use_lora"],
         lora_mode=config.get("lora_mode", "single"),
         surf_stats=surf_stats or None,
+        positive_surf_vars=positive_surf_vars,
+        positive_atmos_vars=positive_atmos_vars,
+        clamp_at_first_step=clamp_at_first_step,
     )
 
     print("Loading pre-trained weights (strict=False)")

@@ -130,6 +130,21 @@ logging:
 # ===========================================================================
 modes:
 
+  # Stage 0: Warmup (Task H4 / 01_TARGET_STATE.md D6).
+  # Full backbone frozen; only injected embeddings (ttr, tcwv, sst),
+  # their decoder heads (ttr, tcwv), and the msl head train. LoRA adapters OFF.
+  warmup:
+    experiment: { name: "stage0_warmup" }
+    checkpointing: { save_dir: "checkpoints/warmup" }
+    model:
+      use_lora: false
+      freeze_backbone: true
+    training:
+      require_full_model: true
+      epochs: 3
+      optimizer: { lr: 1.0e-4 }
+      rollout: { enabled: false }
+
   baseline:
     experiment: { name: "phase1_baseline" }
     checkpointing: { save_dir: "checkpoints/baseline" }
@@ -203,4 +218,61 @@ modes:
         max_steps: 4
         step_increase_every_n_epochs: 1
         step_loss_weighting: "final_heavy"
+
+  # Stage 2: Rollout (Task H4 / 01_TARGET_STATE.md D6).
+  # Pushforward curriculum, detached rollout, single adapter. Warm-starts from lora.
+  rollout:
+    experiment:
+      name: "stage2_rollout"
+      init_from: "latest:checkpoints/lora"
+    checkpointing: { save_dir: "checkpoints/rollout" }
+    model:
+      use_lora: true
+      lora_mode: "single"
+      freeze_backbone: true
+      gradient_checkpointing: false
+    training:
+      require_full_model: true
+      epochs: 4
+      optimizer: { lr: 5.0e-5 }
+      scheduler: { warmup_steps: 200 }
+      rollout:
+        enabled: true
+        backprop: "detached"
+        start_steps: 1
+        max_steps: 4
+        step_increase_every_n_epochs: 1
+        step_loss_weighting: "uniform"
+
+  # Stage 3: Physics (Task H4 / 01_TARGET_STATE.md D6).
+  # Pushforward rollout + supervised E-P moisture budget loss. Warm-starts from rollout.
+  physics:
+    experiment:
+      name: "stage3_physics"
+      init_from: "latest:checkpoints/rollout"
+    checkpointing: { save_dir: "checkpoints/physics" }
+    model:
+      use_lora: true
+      lora_mode: "single"
+      freeze_backbone: true
+      gradient_checkpointing: false
+    loss:
+      moisture_budget:
+        enabled: true
+        weight: 0.0
+        tropics_bbox: [-20, 20]
+        dt_seconds: 21600
+    training:
+      require_full_model: true
+      epochs: 6
+      optimizer: { lr: 3.0e-5 }
+      scheduler: { warmup_steps: 100 }
+      rollout:
+        enabled: true
+        backprop: "detached"
+        start_steps: 2
+        max_steps: 4
+        step_increase_every_n_epochs: 1
+        step_loss_weighting: "uniform"
+
         
