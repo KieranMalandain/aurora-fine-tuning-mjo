@@ -123,8 +123,8 @@ def test_per_variable_index_independence_and_chunking_asymmetry(
         max_rollout_steps=1,
     )
 
-    # 1. All 11 variables must exist in the map
-    all_vars = {"2t", "10u", "10v", "msl", "ttr", "tcwv", "z", "q", "t", "u", "v"}
+    # 1. All 13 variables (including H3 targets tp6h and mslhf) must exist in the map
+    all_vars = {"2t", "10u", "10v", "msl", "ttr", "tcwv", "tp6h", "mslhf", "z", "q", "t", "u", "v"}
     assert set(ds._var_ts_map.keys()) == all_vars
 
     # 2. Every variable map must be a distinct dictionary object in memory

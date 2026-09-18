@@ -85,6 +85,8 @@ DATA_VARS = [
     ("msl", "Step02/ERA5.remap_180x360MODIS_6hrInst/PS", "ps", False),
     ("ttr", "Step03/ERA5.remap_180x360MODIS_6hrInst/meanTNLWFLX", "mtnlwrf", False),
     ("tcwv", "Step02/ERA5.remap_180x360MODIS_6hrInst/tcwv", "tcwv", False),
+    ("tp6h", "Step06/ERA5.remap_180x360MODIS_6hrAccu/TP6H", "tp6h", False),
+    ("mslhf", "Step03/ERA5.remap_180x360MODIS_6hrInst/meanSLHFLX", "mslhf", False),
     ("z", "Step01/ERA5.remap_180x360MODIS_6hrInst/gopt", "z", True),
     ("q", "Step01/ERA5.remap_180x360MODIS_6hrInst/sphu", "q", True),
     ("t", "Step01/ERA5.remap_180x360MODIS_6hrInst/tprt", "t", True),
@@ -171,6 +173,19 @@ def generate_var_data(
         base = 5.0 + 35.0 * (cos_phi**3)
         arr = np.broadcast_to(base[None, :, :], (n_time, n_lat, n_lon))
         return np.round(arr, 2).astype(np.float32)
+
+    if var_name == "tp6h":
+        # Total precipitation in 6 hours (m): mean ~ 0.001 m (4 mm/day), non-negative
+        base = 0.0005 + 0.0015 * (cos_phi**2)
+        arr = np.broadcast_to(base[None, :, :], (n_time, n_lat, n_lon))
+        return np.round(arr, 5).astype(np.float32)
+
+    if var_name == "mslhf":
+        # Mean surface latent heat flux (W/m^2): ERA5 downward-positive convention,
+        # so evaporation gives negative flux: mean ~ -100 W/m^2 (-3.4 mm/day)
+        base = -80.0 - 40.0 * (cos_phi**2)
+        arr = np.broadcast_to(base[None, :, :], (n_time, n_lat, n_lon))
+        return np.round(arr, 1).astype(np.float32)
 
     # Atmospheric variables (time, lev, lat, lon)
     assert lev is not None

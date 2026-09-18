@@ -22,6 +22,7 @@ from aurora_mjo.dataset import LANLMJODataset
 
 EXPECTED_ATMOS_LEVELS = (50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 850, 925, 1000)
 EXPECTED_SURF_VARS = {"2t", "10u", "10v", "msl", "ttr", "tcwv"}
+EXPECTED_SURF_TARGET_VARS = EXPECTED_SURF_VARS | {"tp6h", "mslhf"}
 EXPECTED_ATMOS_VARS = {"z", "q", "t", "u", "v"}
 EXPECTED_STATIC_VARS = {"z", "lsm", "slt"}
 
@@ -103,7 +104,7 @@ def test_dataset_input_and_target_timestep_axes(synthetic_dataset: LANLMJODatase
     atmos_out = atmos_targets_list[0]
 
     assert set(in_batch.surf_vars.keys()) == EXPECTED_SURF_VARS
-    assert set(surf_out.keys()) == EXPECTED_SURF_VARS
+    assert set(surf_out.keys()) == EXPECTED_SURF_TARGET_VARS
 
     for k, v in in_batch.surf_vars.items():
         assert v.ndim == 4, f"Surface input '{k}' expected 4D (B, T, H, W), got {v.ndim}D"
