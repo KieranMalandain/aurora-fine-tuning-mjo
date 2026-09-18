@@ -67,7 +67,14 @@ SURFACE_VAR_MAP = {
     "msl": ("Step02/ERA5.remap_180x360MODIS_6hrInst/PS", "*", "ps"),
     "ttr": ("Step03/ERA5.remap_180x360MODIS_6hrInst/meanTNLWFLX", "*", "mtnlwrf"),
     "tcwv": ("Step02/ERA5.remap_180x360MODIS_6hrInst/tcwv", "*", "tcwv"),
+    "tp6h": ("Step06/ERA5.remap_180x360MODIS_6hrAccu/TP6H", "*", "tp6h"),
+    "mslhf": ("Step03/ERA5.remap_180x360MODIS_6hrInst/meanSLHFLX", "*", "mslhf"),
 }
+
+# Target-only surface variables: read as loss targets (H3), NOT model inputs.
+# They do not appear in model.surface_variables, have no patch embeddings,
+# and do not enter the grid loss.
+TARGET_ONLY_SURFACE_VARS = {"tp6h", "mslhf"}
 
 ATMOS_VAR_MAP = {
     "z": ("Step01/ERA5.remap_180x360MODIS_6hrInst/gopt", "*", "z"),
@@ -566,6 +573,8 @@ class LANLMJODataset(Dataset):
         # --- Surface inputs ---
         surf_in = {}
         for aurora_name, (files, native_name) in self.surf_file_map.items():
+            if aurora_name in TARGET_ONLY_SURFACE_VARS:
+                continue
             raw = self._read_var_at_times(aurora_name, files, native_name, input_ts)
             surf_in[aurora_name] = process_var(raw)[None]  # (1, 2, H, W)
 

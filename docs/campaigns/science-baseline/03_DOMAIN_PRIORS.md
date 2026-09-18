@@ -273,6 +273,15 @@ numerics are sound and the supervised term is worth training on. If the residual
 is dominated by discretisation noise, the term is retired and that is a clean
 result. **Run this before writing the loss**, not after.
 
+### 8.1 Measured Step-1 Diagnostic (1980-01 ERA5, Tropical Band ±20°, 1,771,200 points)
+
+- **Pointwise correlation $r(R, E - P)$**: `0.3746` (with $p_s$ masking), `0.3638` (unmasked).
+- **Pointwise magnitude ratio $|R| / |E - P|$**: `2.3511` (with $p_s$ masking), `2.4036` (unmasked).
+- **Variability ratio $\sigma(R) / \sigma(E - P)$**: `1.8492` ($\sigma(R) = 16.85$ mm/day vs $\sigma(E - P) = 9.11$ mm/day).
+- **Monthly-mean spatial pattern correlation**: `r = 0.8131`.
+- **Monthly-mean spatial magnitude ratio**: `1.4531` ($1.76$ mm/day vs $1.21$ mm/day).
+- **Verdict**: Measured agreement is within a factor of ~2 ($\sigma$ ratio 1.85, monthly spatial ratio 1.45). Numerics are sound; proceed with supervised loss.
+
 ---
 
 ## 9. Skill priors — what a result should look like

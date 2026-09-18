@@ -56,6 +56,8 @@ def test_expected_directories_and_files_exist(
         "Step02/ERA5.remap_180x360MODIS_6hrInst/PS",
         "Step02/ERA5.remap_180x360MODIS_6hrInst/tcwv",
         "Step03/ERA5.remap_180x360MODIS_6hrInst/meanTNLWFLX",
+        "Step06/ERA5.remap_180x360MODIS_6hrAccu/TP6H",
+        "Step03/ERA5.remap_180x360MODIS_6hrInst/meanSLHFLX",
     ]
 
     for archive_root in (synthetic_root, synthetic_root_gapped):
@@ -88,6 +90,8 @@ def test_files_contain_native_variable_names(
         ("Step02/ERA5.remap_180x360MODIS_6hrInst/PS", "ps"),
         ("Step03/ERA5.remap_180x360MODIS_6hrInst/meanTNLWFLX", "mtnlwrf"),
         ("Step02/ERA5.remap_180x360MODIS_6hrInst/tcwv", "tcwv"),
+        ("Step06/ERA5.remap_180x360MODIS_6hrAccu/TP6H", "tp6h"),
+        ("Step03/ERA5.remap_180x360MODIS_6hrInst/meanSLHFLX", "mslhf"),
         ("Step01/ERA5.remap_180x360MODIS_6hrInst/gopt", "z"),
         ("Step01/ERA5.remap_180x360MODIS_6hrInst/sphu", "q"),
         ("Step01/ERA5.remap_180x360MODIS_6hrInst/tprt", "t"),

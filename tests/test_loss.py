@@ -24,6 +24,7 @@ from aurora_mjo.config import load_config
 from aurora_mjo.loss import (
     DEFAULT_AURORA_PLEVS,
     DEFAULT_VARIABLE_WEIGHTS,
+    MoistureBudgetLoss,
     SpectralLoss,
     TropicalWeightedL1Loss,
 )
@@ -410,9 +411,9 @@ def test_spectral_identical_fields_give_zero():
 
     field = torch.randn(1, 4, H, W)  # (B=1, L=4, H, W)
     loss = loss_fn.forward(field, field)
-    assert (
-        loss.item() == 0.0
-    ), f"Identical fields should give exactly 0 spectral loss, got {loss.item()}"
+    assert loss.item() == 0.0, (
+        f"Identical fields should give exactly 0 spectral loss, got {loss.item()}"
+    )
 
 
 def test_spectral_shift_distinguishes_amplitude_vs_complex():
@@ -475,3 +476,298 @@ def test_spectral_shift_distinguishes_amplitude_vs_complex():
         f"complex_loss={complex_loss:.6f}  "
         f"ratio={complex_loss / max(amp_loss, 1e-12):.1f}x",
     )
+
+
+# ===========================================================================
+# Task H3: MoistureBudgetLoss Tests
+# ===========================================================================
+
+
+def _make_moisture_loss(H: int = 180, W: int = 360) -> MoistureBudgetLoss:
+    lat = torch.linspace(89.5, -89.5, H)
+    lon = torch.linspace(0.5, 359.5, W)
+    return MoistureBudgetLoss(
+        pressure_levels=DEFAULT_AURORA_PLEVS,
+        latitudes=lat,
+        longitudes=lon,
+    )
+
+
+def test_moisture_budget_analytic_nondivergent_flow():
+    """An analytic non-divergent flow with prescribed E − P returns that E − P to tolerance.
+
+    Sets u=0, v=0 (zero divergence) and uniform dq/dt across levels.
+    The vertically-integrated budget reduces to:
+        R = ∂⟨q⟩/∂t = (Σ dp / g) · (Δq / Δt) [in kg m⁻² s⁻¹]
+    When ERA5 target E − P is set equal to R, the loss |R − (E − P)| must be zero
+    to numerical floating-point precision.
+    """
+    from datetime import datetime
+
+    H, W = 180, 360
+    lat = torch.linspace(89.5, -89.5, H)
+    lon = torch.linspace(0.5, 359.5, W)
+    loss_fn = _make_moisture_loss(H, W)
+
+    ps_val = 101325.0
+    ps_sea = torch.full((1, 1, H, W), ps_val)
+
+    in_batch = Batch(
+        surf_vars={"msl": ps_sea},
+        atmos_vars={
+            "q": torch.zeros((1, 1, 13, H, W)),
+            "u": torch.zeros((1, 1, 13, H, W)),
+            "v": torch.zeros((1, 1, 13, H, W)),
+        },
+        static_vars={},
+        metadata=Metadata(
+            lat=lat,
+            lon=lon,
+            time=(datetime(1980, 1, 1),),
+            atmos_levels=DEFAULT_AURORA_PLEVS,
+            rollout_step=0,
+        ),
+    )
+
+    dq_dt = 1.0e-6  # kg/kg per step (21600 s)
+    pred_batch = Batch(
+        surf_vars={"msl": ps_sea},
+        atmos_vars={
+            "q": torch.full((1, 1, 13, H, W), dq_dt),
+            "u": torch.zeros((1, 1, 13, H, W)),
+            "v": torch.zeros((1, 1, 13, H, W)),
+        },
+        static_vars={},
+        metadata=Metadata(
+            lat=lat,
+            lon=lon,
+            time=(datetime(1980, 1, 1, 6),),
+            atmos_levels=DEFAULT_AURORA_PLEVS,
+            rollout_step=1,
+        ),
+    )
+
+    # Implied R in mm/day
+    r_expected = (loss_fn.dp.sum() / loss_fn.g) * (dq_dt / loss_fn.dt) * 86400.0
+
+    # ERA5 downward-positive convention: E = -mslhf / L_v * 86400, P = tp6h * 4000
+    mslhf_val = -(r_expected.item() / 86400.0 * loss_fn.L_v)
+    target_dict = {
+        "mslhf": torch.full((H, W), mslhf_val),
+        "tp6h": torch.zeros((H, W)),
+    }
+
+    loss = loss_fn(in_batch, pred_batch, target_dict=target_dict)
+    assert loss.item() < 1.0e-4, (
+        f"Expected analytic non-divergent loss near zero, got {loss.item():.6e} mm/day"
+    )
+
+
+def test_moisture_budget_surface_pressure_mask_synthetic_mountain():
+    """Surface-pressure mask excludes the correct levels for a synthetic mountain.
+
+    Over ocean (ps = 1013.25 hPa), all 13 Aurora pressure levels (50–1000 hPa)
+    satisfy p <= ps and are integrated.
+    Over a synthetic mountain (ps = 650 hPa), levels with p > 650 hPa (700, 850,
+    925, 1000 hPa; indices 9..12) are excluded from the vertical column integral.
+    """
+    H, W = 180, 360
+    loss_fn = _make_moisture_loss(H, W)
+
+    x = torch.ones((1, 1, 13, H, W))
+    ps_sea = torch.full((1, 1, H, W), 101325.0)
+    ps_mtn = torch.full((1, 1, H, W), 65000.0)
+
+    # 1. Unmasked integral equals sea-level ps integral
+    vi_all = loss_fn.vertical_integral(x)
+    vi_sea = loss_fn.vertical_integral(x, ps_sea)
+    assert torch.allclose(vi_all, vi_sea)
+
+    # 2. Mountain integral excludes levels 9..12 (700, 850, 925, 1000 hPa)
+    vi_mtn = loss_fn.vertical_integral(x, ps_mtn)
+    expected_mtn = (loss_fn.dp[:9].sum() / loss_fn.g).item()
+    actual_mtn = vi_mtn.mean().item()
+    assert abs(actual_mtn - expected_mtn) < 1.0e-2
+
+    # 3. Modifying values at 1000 hPa (level index 12) changes sea-level integral
+    #    but has zero effect on the mountain integral
+    x_perturbed = x.clone()
+    x_perturbed[:, :, 12, :, :] += 10.0
+    vi_sea_pert = loss_fn.vertical_integral(x_perturbed, ps_sea)
+    vi_mtn_pert = loss_fn.vertical_integral(x_perturbed, ps_mtn)
+
+    assert not torch.allclose(vi_sea, vi_sea_pert)
+    assert torch.allclose(vi_mtn, vi_mtn_pert)
+
+
+def test_moisture_budget_exact_match_gives_zero_loss():
+    """A field whose implied residual E − P matches ERA5 exactly gives zero loss."""
+    from datetime import datetime
+
+    H, W = 180, 360
+    lat = torch.linspace(89.5, -89.5, H)
+    lon = torch.linspace(0.5, 359.5, W)
+    loss_fn = _make_moisture_loss(H, W)
+
+    ps = torch.full((1, 1, H, W), 101325.0)
+    torch.manual_seed(42)
+    q_curr = torch.rand(1, 1, 13, H, W) * 1.0e-3
+    q_next = q_curr + torch.randn(1, 1, 13, H, W) * 1.0e-4
+    u_next = torch.randn(1, 1, 13, H, W) * 5.0
+    v_next = torch.randn(1, 1, 13, H, W) * 5.0
+
+    b_in = Batch(
+        surf_vars={"msl": ps},
+        atmos_vars={"q": q_curr, "u": u_next, "v": v_next},
+        static_vars={},
+        metadata=Metadata(
+            lat=lat,
+            lon=lon,
+            time=(datetime(1980, 1, 1),),
+            atmos_levels=DEFAULT_AURORA_PLEVS,
+            rollout_step=0,
+        ),
+    )
+    b_pred = Batch(
+        surf_vars={"msl": ps},
+        atmos_vars={"q": q_next, "u": u_next, "v": v_next},
+        static_vars={},
+        metadata=Metadata(
+            lat=lat,
+            lon=lon,
+            time=(datetime(1980, 1, 1, 6),),
+            atmos_levels=DEFAULT_AURORA_PLEVS,
+            rollout_step=1,
+        ),
+    )
+
+    # Compute true implied R
+    dq_col = loss_fn.vertical_integral(q_next - q_curr, ps) / loss_fn.dt
+    f_u = loss_fn.vertical_integral(u_next * q_next, ps)
+    f_v = loss_fn.vertical_integral(v_next * q_next, ps)
+    div_f = loss_fn.spherical_divergence(f_u, f_v)
+    r_exact = (dq_col + div_f) * 86400.0
+
+    # Build target matching R
+    r_2d = r_exact.squeeze(0).squeeze(0)
+    tgt_dict = {
+        "mslhf": -(r_2d / 86400.0 * loss_fn.L_v),
+        "tp6h": torch.zeros((H, W)),
+    }
+
+    loss = loss_fn(b_in, b_pred, target_dict=tgt_dict)
+    assert loss.item() < 1.0e-4, f"Exact match expected loss ~ 0, got {loss.item():.6e} mm/day"
+
+
+def test_moisture_budget_smoothed_field_gives_larger_loss():
+    """A smoothed field gives a larger loss than a sharp one.
+
+    This is the direct regression test for defect R2 (00_CONTEXT.md R2).
+    Pre-H3 unsupervised loss penalised |R| -> 0, which rewarded smoothing
+    (loss(smooth) < loss(sharp)) and penalised active convective perturbations.
+    H3 supervised loss penalises |R - (E - P)_ERA5| -> 0, so:
+      - sharp field matching truth: loss(sharp) ≈ 0
+      - smoothed field missing peak: loss(smooth) > loss(sharp)
+    """
+    from datetime import datetime
+
+    H, W = 180, 360
+    lat = torch.linspace(89.5, -89.5, H)
+    lon = torch.linspace(0.5, 359.5, W)
+    loss_fn = _make_moisture_loss(H, W)
+
+    ps = torch.full((1, 1, H, W), 101325.0)
+
+    # Sharp convective perturbation (Gaussian width sigma = 4 grid cells)
+    yy, xx = torch.meshgrid(torch.arange(H) - 90, torch.arange(W) - 180, indexing="ij")
+    r2 = yy.float() ** 2 + xx.float() ** 2
+    gauss_sharp = torch.exp(-r2 / (2 * 4.0**2))
+    q_sharp = torch.zeros(1, 1, 13, H, W)
+    q_sharp[0, 0, 10] = gauss_sharp * 0.01  # at 850 hPa
+
+    # Smoothed convective perturbation (wider Gaussian sigma = 16, lower peak)
+    gauss_smooth = torch.exp(-r2 / (2 * 16.0**2))
+    q_smooth = torch.zeros(1, 1, 13, H, W)
+    q_smooth[0, 0, 10] = gauss_smooth * (0.01 * (4.0 / 16.0) ** 2)
+
+    u_wind = torch.full((1, 1, 13, H, W), 5.0)
+    v_wind = torch.zeros((1, 1, 13, H, W))
+
+    b_in0 = Batch(
+        surf_vars={"msl": ps},
+        atmos_vars={"q": torch.zeros(1, 1, 13, H, W), "u": u_wind, "v": v_wind},
+        static_vars={},
+        metadata=Metadata(
+            lat=lat,
+            lon=lon,
+            time=(datetime(1980, 1, 1),),
+            atmos_levels=DEFAULT_AURORA_PLEVS,
+            rollout_step=0,
+        ),
+    )
+    b_sharp = Batch(
+        surf_vars={"msl": ps},
+        atmos_vars={"q": q_sharp, "u": u_wind, "v": v_wind},
+        static_vars={},
+        metadata=Metadata(
+            lat=lat,
+            lon=lon,
+            time=(datetime(1980, 1, 1, 6),),
+            atmos_levels=DEFAULT_AURORA_PLEVS,
+            rollout_step=1,
+        ),
+    )
+    b_smooth = Batch(
+        surf_vars={"msl": ps},
+        atmos_vars={"q": q_smooth, "u": u_wind, "v": v_wind},
+        static_vars={},
+        metadata=Metadata(
+            lat=lat,
+            lon=lon,
+            time=(datetime(1980, 1, 1, 6),),
+            atmos_levels=DEFAULT_AURORA_PLEVS,
+            rollout_step=1,
+        ),
+    )
+
+    # Implied residuals
+    f_u_sharp = loss_fn.vertical_integral(u_wind * q_sharp, ps)
+    div_sharp = loss_fn.spherical_divergence(f_u_sharp, torch.zeros_like(f_u_sharp))
+    dq_sharp = loss_fn.vertical_integral(q_sharp, ps) / loss_fn.dt
+    r_sharp = (dq_sharp + div_sharp) * 86400.0
+
+    f_u_smooth = loss_fn.vertical_integral(u_wind * q_smooth, ps)
+    div_smooth = loss_fn.spherical_divergence(f_u_smooth, torch.zeros_like(f_u_smooth))
+    dq_smooth = loss_fn.vertical_integral(q_smooth, ps) / loss_fn.dt
+    r_smooth = (dq_smooth + div_smooth) * 86400.0
+
+    # Target matching true sharp envelope
+    tgt_dict = {
+        "mslhf": -(r_sharp.squeeze(0).squeeze(0) / 86400.0 * loss_fn.L_v),
+        "tp6h": torch.zeros((H, W)),
+    }
+
+    # H3 losses
+    h3_loss_sharp = loss_fn(b_in0, b_sharp, target_dict=tgt_dict).item()
+    h3_loss_smooth = loss_fn(b_in0, b_smooth, target_dict=tgt_dict).item()
+
+    # Pre-H3 unsupervised losses (mean(|R|) over tropics)
+    pre_h3_loss_sharp = torch.mean(torch.abs(r_sharp[:, :, loss_fn.trop_mask, :])).item()
+    pre_h3_loss_smooth = torch.mean(torch.abs(r_smooth[:, :, loss_fn.trop_mask, :])).item()
+
+    smooth_better_pre = pre_h3_loss_smooth < pre_h3_loss_sharp
+    smooth_worse_h3 = h3_loss_smooth > h3_loss_sharp
+    print(
+        f"\n[R2 regression proof] Pre-H3: sharp={pre_h3_loss_sharp:.4f} mm/day, "
+        f"smooth={pre_h3_loss_smooth:.4f} mm/day (smooth < sharp: {smooth_better_pre})"
+    )
+    print(
+        f"[R2 regression proof] H3:     sharp={h3_loss_sharp:.4f} mm/day, "
+        f"smooth={h3_loss_smooth:.4f} mm/day (smooth > sharp: {smooth_worse_h3})"
+    )
+
+    # Direct regression proofs:
+    # 1. Pre-H3 demonstrably rewarded smoothing (the defect)
+    assert pre_h3_loss_smooth < pre_h3_loss_sharp, "Pre-H3 defect condition not reproduced"
+    # 2. H3 demonstrably penalises smoothing (the resolution)
+    assert h3_loss_smooth > h3_loss_sharp, "H3 must give larger loss for smoothed field"

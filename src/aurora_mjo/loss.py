@@ -579,101 +579,101 @@ class SpectralLoss(nn.Module):
 
 
 class MoistureBudgetLoss(nn.Module):
-    """
-    Physics-Informed Loss: Column-Integrated Moisture Conservation.
+    """Physics-Informed Loss: Column-Integrated Moisture Conservation Supervised by ERA5 E − P.
 
     Mathematical basis
     ==================
     The vertically-integrated moisture budget over an atmospheric column is:
 
-        d<q>/dt + div(<v dot q>) = E - P
+        ∂⟨q⟩/∂t + ∇·⟨v q⟩ = E − P
 
     where:
-        <dot>     = vertical integral ∫(dot) dp/g  over pressure levels
-        q       = specific humidity  (kg/kg)
-        v       = (u, v) horizontal wind  (m/s)
-        E       = surface evaporation  (kg/m^2/s)
-        P       = precipitation  (kg/m^2/s)
+        ⟨·⟩     = vertical column integral ∫(·) dp/g over pressure levels
+        q       = specific humidity (kg/kg)
+        v       = (u, v) horizontal wind (m/s)
+        E       = surface evaporation (kg/m²/s)
+        P       = precipitation (kg/m²/s)
 
-    Aurora does NOT predict E and P directly.  We compute the **implied
-    E−P residual**  R = d<q>/dt + div(<v dot q>)  and penalise its magnitude.
-    A model that oversmooths convection creates artificially large moisture
-    sources/sinks (large |R|); penalising |R| encourages column-wise
-    moisture conservation.  Converted to mm/day (x86 400) so the loss is
-    O(1–10) and compatible with the grid L1 loss.  Only the tropical band
-    (default +-20deg) is included, since MJO convection lives in the tropics.
+    Scientific defect R2 resolution (00_CONTEXT.md R2, 02_SCIENTIFIC_CONTRACT.md §3):
+    --------------------------------------------------------------------------------
+    The pre-H3 loss penalized mean(|R|) toward zero, where R = ∂⟨q⟩/∂t + ∇·⟨vq⟩.
+    In the tropics, active MJO convection produces E − P ≈ -15 to -35 mm/day.
+    Driving R toward zero penalised the active convective envelope the model is fine-tuned
+    to predict and rewarded oversmoothing (smoothed fields have small gradients and small R).
+    H3 supervises the implied residual R against ERA5 observed (E − P)_ERA5:
+        L_moisture = mean(|R − (E − P)_ERA5|)  over the tropical band (±20°).
 
-    v2 FIXES relative to the original implementation
-    ================================================
-    1. **History-dim bug (silently wrong physics).**  Aurora input batches
-       carry a 2-step history window: q_curr had shape (B, 2, L, H, W)
-       while the prediction has (B, 1, L, H, W).  The old code broadcast
-       (B,1,dot) − (B,2,dot) -> (B,2,dot), producing TWO residuals: one against
-       time t (correct, Δt = 6 h) and one against t−6 h (a 12 h difference
-       divided by 6 h  - physically wrong and doubling the loss signal).
-       We now explicitly slice the LAST history step:  q_curr[:, -1:].
-    2. **Mixed-precision safety.**  q ~ 1e-3 kg/kg; the tendency is a small
-       difference of small numbers.  Under bf16 autocast this is mostly
-       rounding noise, and it contributed to the cuBLAS/bf16 instability in
-       job 52464118.  The whole residual is now computed with autocast
-       DISABLED in float32.  (Gradients flow back into the autocast region
-       normally  - this is fully differentiable.)
-    3. **NaN/Inf hygiene.**  Inputs pass through nan_to_num, the residual is
-       clamped to +-1e4 mm/day (physical |E−P| is <300 mm/day; the clamp only
-       stops a transient blow-up from flooding the optimizer with inf grads),
-       and a final non-finite guard returns a zero loss for that step
-       instead of poisoning the whole batch.
-    4. **Grid-mismatch guard.**  If the incoming field's lat size doesn't
-       match the configured grid (e.g. 64x128 smoke tests), we return a
-       zero (grad-carrying) loss instead of a shape error.
+    ERA5 downward-positive sign convention & unit conversions:
+    ----------------------------------------------------------
+    - Vertical fluxes in ERA5 are positive DOWNWARD (atmosphere -> surface).
+    - Evaporation transfers latent heat UPWARD from surface into atmosphere, so
+      ERA5 mslhf (mean surface latent heat flux, W m⁻²) is NEGATIVE for evaporation
+      (tropical ocean mean ~ -113 W m⁻²).
+      Therefore, upward evaporation water mass flux is:
+          E (kg m⁻² s⁻¹) = -mslhf / L_v   where L_v = 2.501 × 10⁶ J kg⁻¹
+          E (mm/day) = (-mslhf / L_v) × 86400.0
+    - Precipitation is total 6-hour accumulation tp6h in metres:
+          P (kg m⁻² s⁻¹) = (tp6h / Δt) × 1000.0   where Δt = 21600 s (6 h)
+          P (mm/day) = (tp6h / Δt) × 1000.0 × 86400.0 = tp6h × 4000.0
+    - Target:
+          (E − P)_ERA5 = E_mm_day − P_mm_day
 
-    Numerical scheme (unchanged, verified correct):
-      * Spherical divergence  div = (1/(R cos phi ))[partial u/partial  lambda  + partial (v cos phi )/partial  phi ]
-        with circular longitude padding and replicate latitude padding;
-        the latitude axis runs 90->−90 so the north-minus-south central
-        difference keeps the correct sign.
-      * cos(lat) clamped  geq 1e-5 to avoid pole singularities.
-      * Layer thicknesses dp via central differences (one-sided at edges).
+    Surface-pressure masking (Task H3 Step 4):
+    ------------------------------------------
+    The column integral is masked at surface pressure ps: pressure levels with p > ps
+    sit below the topography and are excluded from the integral (mask = 0), not extrapolated.
+    This prevents artificial sub-surface moisture inflation over land and mountain barriers
+    (such as the Maritime Continent).
     """
 
     def __init__(
         self,
-        pressure_levels,
-        latitudes,
-        longitudes,
-        dt_seconds=21600,
-        tropics_bbox=(-20, 20),
+        pressure_levels: list[float] | tuple[float, ...] | torch.Tensor = DEFAULT_AURORA_PLEVS,
+        latitudes: list[float] | tuple[float, ...] | torch.Tensor | None = None,
+        longitudes: list[float] | tuple[float, ...] | torch.Tensor | None = None,
+        dt_seconds: float = 21600.0,
+        tropics_bbox: tuple[float, float] = (-20.0, 20.0),
         residual_clamp_mm_day: float = 1.0e4,
+        latent_heat_vaporization: float = 2.501e6,
+        plevs: list[float] | tuple[float, ...] | torch.Tensor | None = None,
     ):
         super().__init__()
+        if plevs is not None:
+            pressure_levels = plevs
         self.dt = float(dt_seconds)
         self.g = 9.80665
         self.R = 6371000.0
+        self.L_v = float(latent_heat_vaporization)
         self.residual_clamp = float(residual_clamp_mm_day)
 
-        # ---- Grid tensors ------------------------------------------------
-        plevs = torch.tensor(pressure_levels, dtype=torch.float32) * 100.0  # hPa->Pa
-        self.register_buffer("plevs", plevs)
+        if latitudes is None:
+            latitudes = torch.linspace(89.5, -89.5, 180).tolist()
+        if longitudes is None:
+            longitudes = torch.linspace(0.5, 359.5, 360).tolist()
 
-        lats = torch.tensor(latitudes, dtype=torch.float32)
-        lons = torch.tensor(longitudes, dtype=torch.float32)
+        # ---- Grid tensors ------------------------------------------------
+        plevs_t = torch.as_tensor(pressure_levels, dtype=torch.float32)
+        if plevs_t.max() <= 1100.0:  # If in hPa, convert to Pa
+            plevs_t = plevs_t * 100.0
+        self.register_buffer("plevs", plevs_t)
+
+        lats = torch.as_tensor(latitudes, dtype=torch.float32)
+        lons = torch.as_tensor(longitudes, dtype=torch.float32)
         self.register_buffer("lats", lats)
         self.register_buffer("lons", lons)
 
         # Layer-thickness weights (central differences interior, one-sided edges)
-        dp = torch.zeros_like(plevs)
-        dp[0] = plevs[1] - plevs[0]
-        dp[1:-1] = (plevs[2:] - plevs[:-2]) / 2.0
-        dp[-1] = plevs[-1] - plevs[-2]
-        self.register_buffer("dp", dp.view(1, 1, -1, 1, 1))  # (1,1,L,1,1)
+        dp = torch.zeros_like(plevs_t)
+        dp[0] = plevs_t[1] - plevs_t[0]
+        dp[1:-1] = (plevs_t[2:] - plevs_t[:-2]) / 2.0
+        dp[-1] = plevs_t[-1] - plevs_t[-2]
+        self.register_buffer("dp", dp)  # 1D (L,)
 
         # ---- Spherical geometry ------------------------------------------
         dlat_rad = torch.deg2rad(torch.abs(lats[0] - lats[1]))
         dlon_rad = torch.deg2rad(torch.abs(lons[1] - lons[0]))
 
-        self.dy = (
-            self.R * dlat_rad
-        )  # constant (meters per lat grid step x2 applied below)
+        self.dy = self.R * dlat_rad
 
         cos_lat_raw = torch.cos(torch.deg2rad(lats))
         cos_lat_safe = torch.clamp(cos_lat_raw, min=1e-5).view(1, 1, -1, 1)
@@ -689,18 +689,42 @@ class MoistureBudgetLoss(nn.Module):
     # Helpers
     # ------------------------------------------------------------------
 
-    def vertical_integral(self, x):
-        """Column integral  <X> = Σ X dot dp / g  over pressure-level dim (dim=2)."""
-        return torch.sum(x * self.dp / self.g, dim=2)  # (B,T,H,W)
+    def vertical_integral(
+        self, x: torch.Tensor, ps: torch.Tensor | None = None
+    ) -> torch.Tensor:
+        """Column integral <X> = ∫ X dp/g over pressure-level dim (dim=-3), masked at ps.
 
-    def spherical_divergence(self, u_flux, v_flux):
-        """div = (1 / R cos phi ) [partial u/partial  lambda  + partial (v cos phi )/partial  phi ] on (B,T,H,W) fields."""
-        # partial u/partial  lambda  term  - circular in longitude; dx already contains Rdotcos phi dotd lambda .
+        Args:
+            x: Tensor of shape (..., L, H, W).
+            ps: Optional surface pressure tensor in Pa. Levels with p > ps are excluded.
+        """
+        dp_shape = [1] * (x.ndim - 3) + [-1, 1, 1]
+        dp_view = self.dp.view(*dp_shape)
+
+        if ps is None:
+            return torch.sum(x * dp_view / self.g, dim=-3)
+
+        # Prepare ps to broadcast over (..., L, H, W)
+        ps_view = ps.float()
+        while ps_view.ndim < x.ndim:
+            if ps_view.ndim == 2:  # (H, W) -> (... 1, H, W)
+                ps_view = ps_view.view(*([1] * (x.ndim - 2)), ps_view.shape[0], ps_view.shape[1])
+            elif ps_view.ndim == 3:  # (B, H, W) -> (B, 1, H, W)
+                ps_view = ps_view.unsqueeze(-3)
+            elif ps_view.ndim == 4 and x.ndim == 5:  # (B, 1, H, W) -> (B, 1, 1, H, W)
+                ps_view = ps_view.unsqueeze(-3)
+            else:
+                ps_view = ps_view.unsqueeze(0)
+
+        plevs_view = self.plevs.view(*dp_shape)
+        mask = (plevs_view <= ps_view).float()
+        return torch.sum(x * mask * dp_view / self.g, dim=-3)
+
+    def spherical_divergence(self, u_flux: torch.Tensor, v_flux: torch.Tensor) -> torch.Tensor:
+        """div = (1 / R cos phi ) [∂u/∂λ + ∂(v cos phi)/∂φ] on (B,T,H,W) fields."""
         u_padded = F.pad(u_flux, pad=(1, 1, 0, 0), mode="circular")
         du_dlon = (u_padded[..., 2:] - u_padded[..., :-2]) / (2.0 * self.dx)
 
-        # partial (v cos phi )/partial  phi - replicate at poles.  lats run 90->−90 so
-        # (north − south) is the correct + phi  direction.
         v_cos_lat = v_flux * self.cos_lat
         v_padded = F.pad(v_cos_lat, pad=(0, 0, 1, 1), mode="replicate")
         dv_dlat = (v_padded[..., :-2, :] - v_padded[..., 2:, :]) / (2.0 * self.dy)
@@ -711,14 +735,20 @@ class MoistureBudgetLoss(nn.Module):
     # Forward
     # ------------------------------------------------------------------
 
-    def forward(self, in_batch, pred_batch):
-        """Tropical moisture-budget residual loss (scalar, mm/day,  geq0).
+    def forward(
+        self,
+        in_batch,
+        pred_batch,
+        target_dict: dict[str, torch.Tensor] | None = None,
+        emp_target: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Tropical moisture-budget residual loss (scalar, mm/day, ≥ 0).
 
         Args:
-            in_batch:   Aurora ``Batch`` fed into the current forward pass
-                        (atmos_vars shaped (B, T_hist, L, H, W), T_hist = 2).
-            pred_batch: Aurora ``Batch`` predicted for the next time step
-                        (atmos_vars shaped (B, 1, L, H, W)).
+            in_batch: Aurora Batch fed into the current forward pass.
+            pred_batch: Aurora Batch predicted for the next time step.
+            target_dict: Optional dict containing loss targets (mslhf, tp6h, msl).
+            emp_target: Optional direct E−P target tensor in mm/day.
         """
         device = self.plevs.device
 
@@ -730,50 +760,86 @@ class MoistureBudgetLoss(nn.Module):
             ):
                 return torch.zeros((), device=device, requires_grad=True)
 
-        # FIX 1: take ONLY the latest history step so the tendency is a
-        # true 6-h difference. (B, T_hist, L, H, W) -> (B, 1, L, H, W).
+        # Slice latest history step for true 6-h difference: (B, 1, L, H, W)
         q_curr = in_batch.atmos_vars["q"][:, -1:, ...]
         q_next = pred_batch.atmos_vars["q"][:, -1:, ...]
         u_next = pred_batch.atmos_vars["u"][:, -1:, ...]
         v_next = pred_batch.atmos_vars["v"][:, -1:, ...]
 
-        # Grid-mismatch guard (smoke tests / low-res debugging).
+        # Grid-mismatch guard (smoke tests / low-res debugging)
         if (
             q_next.shape[-2] != self.lats.shape[0]
             or q_next.shape[-1] != self.lons.shape[0]
         ):
             return torch.zeros((), device=device, requires_grad=True)
 
-        # FIX 2: force float32 outside autocast  - the residual is a small
-        # difference of small numbers and is garbage in bf16.
+        # Retrieve surface pressure (msl) for topographic masking if available
+        ps_curr = None
+        ps_next = None
+        if hasattr(in_batch, "surf_vars") and "msl" in in_batch.surf_vars:
+            ps_curr = in_batch.surf_vars["msl"][:, -1:, ...]
+        if hasattr(pred_batch, "surf_vars") and "msl" in pred_batch.surf_vars:
+            ps_next = pred_batch.surf_vars["msl"][:, -1:, ...]
+        elif target_dict is not None and "msl" in target_dict:
+            ps_next = target_dict["msl"].to(device).float()
+            while ps_next.ndim < 4:
+                ps_next = ps_next.unsqueeze(0) if ps_next.ndim == 2 else ps_next.unsqueeze(1)
+            if ps_curr is None:
+                ps_curr = ps_next
+
+        # Float32 outside autocast (residual is small difference of small numbers)
         with torch.autocast(device_type=q_next.device.type, enabled=False):
             q_curr = torch.nan_to_num(q_curr.float())
             q_next_f = torch.nan_to_num(q_next.float())
             u_next_f = torch.nan_to_num(u_next.float())
             v_next_f = torch.nan_to_num(v_next.float())
 
-            # Column integrals -> (B, 1, H, W)
-            int_q_curr = self.vertical_integral(q_curr)
-            int_q_next = self.vertical_integral(q_next_f)
-            int_uq = self.vertical_integral(u_next_f * q_next_f)
-            int_vq = self.vertical_integral(v_next_f * q_next_f)
+            # Column integrals masked at surface pressure ps
+            int_q_curr = self.vertical_integral(q_curr, ps=ps_curr)
+            int_q_next = self.vertical_integral(q_next_f, ps=ps_next)
+            int_uq = self.vertical_integral(u_next_f * q_next_f, ps=ps_next)
+            int_vq = self.vertical_integral(v_next_f * q_next_f, ps=ps_next)
 
             # Moisture tendency + flux divergence (kg/m²/s)
             dq_dt = (int_q_next - int_q_curr) / self.dt
             div_flux = self.spherical_divergence(int_uq, int_vq)
-            residual_si = dq_dt + div_flux  # implied E−P
+            residual_si = dq_dt + div_flux  # implied E−P in kg/m²/s
 
-            # Convert to mm/day, clamp against transient blow-ups (FIX 3).
+            # Convert to mm/day (× 86400) and clamp against transient blow-ups
             residual_mm_day = residual_si * 86400.0
             residual_mm_day = torch.clamp(
                 residual_mm_day, -self.residual_clamp, self.residual_clamp
             )
 
-            # Restrict to the tropical band and reduce.
+            # Restrict residual to tropical band: (B, 1, N_trop_lat, W)
             residual_trop = residual_mm_day[:, :, self.trop_mask, :]
-            loss = torch.abs(residual_trop).mean()
 
-            # Final non-finite guard  - never let NaN/Inf reach the optimizer.
+            # Supervise against ERA5 observed (E - P):
+            # ERA5 downward-positive convention: E = -mslhf / L_v, P = tp6h * 4000.0 (mm/day)
+            if emp_target is not None:
+                tgt = emp_target.to(device).float()
+                while tgt.ndim < 4:
+                    tgt = tgt.unsqueeze(0) if tgt.ndim == 2 else tgt.unsqueeze(1)
+                target_trop = tgt[:, :, self.trop_mask, :]
+            elif target_dict is not None and "mslhf" in target_dict and "tp6h" in target_dict:
+                mslhf = target_dict["mslhf"].to(device).float()
+                tp6h = target_dict["tp6h"].to(device).float()
+                while mslhf.ndim < 4:
+                    mslhf = mslhf.unsqueeze(0) if mslhf.ndim == 2 else mslhf.unsqueeze(1)
+                while tp6h.ndim < 4:
+                    tp6h = tp6h.unsqueeze(0) if tp6h.ndim == 2 else tp6h.unsqueeze(1)
+                e_mm_day = (-mslhf / self.L_v) * 86400.0
+                p_mm_day = tp6h * 4000.0
+                emp_calc = e_mm_day - p_mm_day
+                target_trop = emp_calc[:, :, self.trop_mask, :]
+            else:
+                # Fallback to zero target if targets are not provided
+                target_trop = torch.zeros_like(residual_trop)
+
+            diff = torch.abs(residual_trop - target_trop)
+            loss = diff.mean()
+
+            # Final non-finite guard
             if not torch.isfinite(loss):
                 return torch.zeros((), device=device, requires_grad=True)
 
