@@ -1,15 +1,15 @@
 # Living Project State
 
 **Last Updated:** 2026-09-18  
-**Active Phase:** Campaign `science-baseline` Phase H complete (Tasks H1, H2, H3, H4 implemented); ready for Phase J (Evaluation & Ruler).  
+**Active Phase:** Campaign `science-baseline` Phase J (Task J1 implemented: RMM rebuilt with zonal structure, harmonics, 120-day mean, SVD, unit-variance PCs; ready for Task J2: BoM Gate).  
 
 ---
 
 ## 1. Next Action
 
-> **Implement Task J1 (Wheeler-Hendon RMM Reconstruction): launch Phase J evaluation and metric ruler.**
+> **Implement Task J2 (BoM Reproduction Gate): evaluate r > 0.95 against official Australian Bureau of Meteorology reference series over 2016–2019.**
 
-**Justification:** Phase H objective and parameter refinements are complete: Task H1 resolved primary scientific defect R1 (gradient starving of moisture variables), Task H2 resolved R6 (flat-vector FFT replaced with per-variable 2D spatial spectrum), Task H3 resolved R2 (unsupervised $R \to 0$ penalty replaced with ERA5-supervised $E - P$ loss with surface-pressure column masking), and Task H4 audited the trainable surface across four modes (`warmup`, `lora`, `rollout`, `physics`), replaced rollout clamps with Aurora native positivity clamping (`tcwv`, `q`), and protected validation against rollout OOM via `torch.no_grad()`. Next action moves into Phase J for rigorous RMM evaluation metrics.
+**Justification:** Task J1 resolved primary scientific defect R3: replaced the 3-element scalar collapse with full zonal structure ($N_\lambda = 360$ longitudes), simple unweighted meridional mean over 15°S–15°N, mean + 3 harmonics annual seasonal cycle, 120-day mean removal under Convention (A), zonal-mean temporal std normalisation, SVD on $(T_{\text{train}}, 1080)$ without forming covariance, PC normalisation to unit variance, and a frozen sign/order transform. Generated `data/rmm_basis.npz` and `data/rmm_targets.nc` (1980–2019 only). All six `03_DOMAIN_PRIORS.md` §7 properties checked. Next action is the primary campaign gate in Task J2.
 
 *Campaign Synthesis & Next Steps:* See [`docs/campaigns/science-baseline/README.md`](campaigns/science-baseline/README.md) for full campaign plan and execution roadmap.
 
@@ -19,6 +19,7 @@
 
 | Component / Subsystem | Status | Evidence / Reference | Notes |
 | :--- | :--- | :--- | :--- |
+| **RMM Pipeline (Wheeler & Hendon 2004)** | **GREEN** | Task J1 (`src/aurora_mjo/rmm/compute.py`, `evaluate.py`, `scripts/compute_rmm.py`, `tests/test_rmm.py`, `data/rmm_basis.npz`, `data/rmm_targets.nc`) | Rebuilt per `02_SCIENTIFIC_CONTRACT.md` §6: unweighted meridional mean over 15°S–15°N retaining 360 longitudes; annual cycle fitted as mean + 3 harmonics per longitude on 1980–2015; 120-day mean removal under Convention (A); zonal-mean temporal standard deviation normalisation; SVD on $(T_{\text{train}}, 1080)$ with unit-variance PC normalisation; frozen sign/order transform matrix in basis; targets generated for 1980–2019 only (14,610 days; test years quarantined); all 6 domain priors in §7 confirmed (EOF1/2 var: 13.07%/12.68%, PC vars: 1.0000/1.0000, corr: +0.0000, lag: 9 days, active: 60.3%, period: 45.6 days); 8 new unit tests passing; evaluation spec updated. |
 | **Trainable Surface & Clamping** | **GREEN** | Task H4 (`model.py`, `trainer.py`, `unified.yaml`, `test_freeze.py`, `test_rollout.py`) | Parameter budgets audited across 4 modes on 1.3B `AuroraPretrained`: `warmup` (98,352 params / 0.0078%), `lora`/`rollout`/`physics` (2,949,168 params / 0.2342%); Aurora constructor clamping active for `positive_surf_vars=("tcwv",)` and `positive_atmos_vars=("q",)` with `clamp_at_first_step=False`; non-vendor physical bounds retained in `_ROLLOUT_CLAMP` (`msl`, `2t`, `10u`, `10v`, `ttr`); `validate()` wrapped in `torch.no_grad()` (bitwise identical loss at $k=1$, 17.25× peak VRAM reduction at $k=4$, preventing Phase K OOM); parameter name parity tests passing. |
 | **Moisture Conservation (`MoistureBudgetLoss`)** | **GREEN** | Task H3 (`loss.py`, `dataset.py`, `test_loss.py`, `test_dataset_loader.py`) | Supervised column moisture budget: penalises $\|R - (E - P)_{\text{ERA5}}\|$ over tropics ($\pm 20^\circ$); column integral masked at surface pressure $p_s$ (levels with $p > p_s$ excluded); ERA5 downward-positive convention verified ($E = -\text{mslhf}/L_v \times 86400$, $P = \text{tp6h} \times 4000$); `tp6h` and `mslhf` added to `SURFACE_VAR_MAP` as loss targets only; disabled by default across modes (`weight: 0.0`); Step-1 diagnostic measured on 1980-01 ERA5 fields ($r = 0.3746$, ratio $2.3511$, spatial pattern $r = 0.8131$) confirming numerics within ~2x; defect R2 regression proof verified in `test_loss.py`. |
 | **Spectral Loss (per-variable, 2-D)** | **GREEN** | Task H2 (`loss.py`, `trainer.py`, `test_loss.py`) | `SpectralLoss` rewritten: `rfft2` over `(lat, lon)` only per variable per level; normalised with G3 constants; `w_v` weights matching H1; Hann latitude window; amplitude-spectrum formulation (`\|FFT(x̂)\| − \|FFT(x)\|`); disabled by default (`enabled: false`); pre-H2 flat-vector defect (R6) documented and corrected. |
@@ -49,17 +50,18 @@ Measured locally via `uv run pytest --collect-only`:
 
 | Category / Marker | Count | Execution Context | Verified In Tasks |
 | :--- | :--- | :--- | :--- |
-| **Default CI Path** (offline, synthetic CPU) | **122** (122 pass, 0 xfail) | Local dev, GitHub Actions (`ubuntu-latest`) | A3, D1–D3, E1–E2, G1–G5, H1–H4 |
+| **Default CI Path** (offline, synthetic CPU) | **130** (130 pass, 0 xfail) | Local dev, GitHub Actions (`ubuntu-latest`) | A3, D1–D3, E1–E2, G1–G5, H1–H4, J1 |
 | **`needs_data`** (requires CFS archive) | 6 | NERSC Perlmutter login / compute node | D2, D3, E1, G1, G5 |
 | **`needs_gpu`** (requires CUDA device) | 3 | NERSC Perlmutter GPU compute node | D2, G2 |
 | **`slow`** (rollout simulation > 5s) | 1 | NERSC Perlmutter GPU compute node | D2 |
 | **`live`** (external network / HF Hub) | 0 | N/A (all offline) | D2 |
-| **Total Test Suite** | **131** | Full suite passes across environments | F1, G1–G5, H1–H4 |
+| **Total Test Suite** | **140** | Full suite passes across environments | F1, G1–G5, H1–H4, J1 |
 
 ---
 
 ## 4. Open Checklist
 
+- [x] **RMM Pipeline Rebuild (Task J1):** Rebuilt Wheeler & Hendon (2004) pipeline retaining 360 longitudes; annual cycle fitted as mean + 3 harmonics; 120-day mean removal under Convention (A); SVD on $(T, 1080)$ with unit-variance PC normalisation; frozen sign/order transform; generated `data/rmm_basis.npz` and `data/rmm_targets.nc` (1980–2019 only); 8 unit tests in `test_rmm.py` passing.
 - [x] **Trainable-Surface Audit, Native Clamping, Validation `no_grad` (Task H4):** Audited 4 modes on 1.3B `AuroraPretrained` (`warmup`: 98,352 params; `lora`/`rollout`/`physics`: 2,949,168 params); replaced `tcwv`/`q` clamps with Aurora native clamping (`clamp_at_first_step=False`); wrapped validation in `torch.no_grad()` (17.25× VRAM reduction at $k=4$); parameter parity tests passing.
 - [x] **Persisted SST Static Boundary Condition (Task G5 / Q-20):** Sourced ERA5 SST, regridded to 1°, land filled with zonal-mean (worst σ = 1.745), Welford normalisation computed (mean 285.5980 K, std 11.7613 K), verified bitwise identical rollout persistence across 120 steps, static embedding unfreezing hook configured (+16,384 params on 1.3B model).
 - [x] **Compute True Normalisation Statistics (OPEN-01):** Computed true statistics over 1980–2015 at 1° native resolution via Welford parallel reduction; saved to `configs/norm_stats_1980_2015.yaml`; updated `configs/unified.yaml`; migrated to `surf_stats` constructor hook; `test_placeholder_norm_stats_guard` passing (Task G3).
