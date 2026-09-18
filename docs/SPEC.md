@@ -78,19 +78,20 @@ The native variable and directory names in the LANL remapped ERA5 archive differ
 #### Static / Invariant Fields
 | Field Name | Source Path | Variable Key | Native Resolution | Ingestion Transform |
 | :--- | :--- | :--- | :--- | :--- |
-| `z` (surface) | `Step00/ERA5.invariant/*_z.*.nc` | `'Z'` | 1° (180 × 360) | Cleaned, upsampled to 0.25° |
-| `lsm` | `Step00/ERA5.invariant/*_lsm.*.nc` | `'LSM'` | 1° (180 × 360) | Cleaned, upsampled to 0.25° |
-| `slt` | `/pscratch/sd/k/kam352/Aurora/slt/slt_data.nc` | `'slt'` | 0.25° (721 × 1440) | Truncated to 720 × 1440 (non-archive) |
+| `z` (surface) | `Step00/ERA5.invariant/*_z.*.nc` | `'Z'` | 1° (180 × 360) | Native 1° cell-centred (Task G1) |
+| `lsm` | `Step00/ERA5.invariant/*_lsm.*.nc` | `'LSM'` | 1° (180 × 360) | Native 1° cell-centred (Task G1) |
+| `slt` | `data/static/slt_1deg.nc` | `'slt'` | 1° (180 × 360) | Nearest-neighbour regridded (Task G1) |
+| `sst` | `data/static/sst/sst_1deg_<year>.nc` | `'sst'` | 1° (180 × 360) | Persisted static boundary at $t_0$, zonal-mean land fill (Task G5) |
 
 ---
 
 ## 4. Grid, Vertical Levels, and Tensor Geometries
 
-All geometries and statistical measures below are **MEASURED** from the verification suite ([`docs/verify_output_slt.txt`](verify_output_slt.txt)):
+All geometries and statistical measures below are **MEASURED** from the verification suite ([`docs/verify_output_slt.txt`](verify_output_slt.txt)) and Task G1 1.0° native resolution:
 
 ```text
 Native Grid Resolution:   1.0° regular lat/lon (180 latitude × 360 longitude)
-Aurora Grid Resolution:   0.25° regular lat/lon (720 latitude × 1440 longitude)
+Aurora Grid Resolution:   1.0° regular lat/lon (180 latitude × 360 longitude)
 Vertical Pressure Levels: 13 hPa levels: (50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 850, 925, 1000)
 Temporal Spacing:         6-hourly instantaneous (00:00, 06:00, 12:00, 18:00 UTC; 4 steps/day)
 ```
@@ -98,12 +99,12 @@ Temporal Spacing:         6-hourly instantaneous (00:00, 06:00, 12:00, 18:00 UTC
 ### Tensor Dimensions
 | Component | Tensor Shape | Description |
 | :--- | :--- | :--- |
-| **Input Surface Variables** | `[B, 2, 720, 1440]` | 2 consecutive historical timesteps ($t-6\text{h}$, $t$). |
-| **Input Atmos Variables** | `[B, 2, 13, 720, 1440]` | 2 consecutive historical timesteps across 13 vertical levels. |
-| **Target Surface Variables** | `[B, 720, 1440]` | 1 prediction step ($t + \Delta t$) per rollout step. |
-| **Target Atmos Variables** | `[B, 13, 720, 1440]` | 1 prediction step across 13 vertical levels. |
-| **Static Fields (`z`, `lsm`, `slt`)** | `[720, 1440]` | Invariant 2D surface fields injected into every forward pass. |
-| **Metadata Coordinates** | `lat: [720]`, `lon: [1440]` | Uniformly spaced latitudes [90, −90] and longitudes [0, 360). |
+| **Input Surface Variables** | `[B, 2, 180, 360]` | 2 consecutive historical timesteps ($t-6\text{h}$, $t$). |
+| **Input Atmos Variables** | `[B, 2, 13, 180, 360]` | 2 consecutive historical timesteps across 13 vertical levels. |
+| **Target Surface Variables** | `[B, 180, 360]` | 1 prediction step ($t + \Delta t$) per rollout step. |
+| **Target Atmos Variables** | `[B, 13, 180, 360]` | 1 prediction step across 13 vertical levels. |
+| **Static Fields (`z`, `lsm`, `slt`, `sst`)** | `[180, 360]` | Invariant 2D surface fields injected into every forward pass. |
+| **Metadata Coordinates** | `lat: [180]`, `lon: [360]` | Uniformly spaced latitudes [89.5, −89.5] and longitudes [0.5, 359.5]. |
 
 ---
 
@@ -147,9 +148,10 @@ Aurora applies channel-wise normalisation $(x - \mu) / \sigma$ at its encoder bo
 | `2t` | 287.85 K | 14.81 K | Aurora built-in ERA5 stats |
 | `10u` | 0.44 m s⁻¹ | 6.07 m s⁻¹ | Aurora built-in ERA5 stats |
 | `10v` | 0.08 m s⁻¹ | 6.09 m s⁻¹ | Aurora built-in ERA5 stats |
-| `msl` | **96,667.98 Pa** | **9,504.64 Pa** | **PLACEHOLDER (Aurora built-in `sp` stats)** |
-| `ttr` | −226.0498 W m⁻² | 49.2158 W m⁻² | Computed training sample |
-| `tcwv` | 18.2967 kg m⁻² | 16.3265 kg m⁻² | Computed training sample |
+| `msl` | **96,668.75 Pa** | **9,504.41 Pa** | Computed 1980–2015 Welford stats (Task G3) |
+| `ttr` | −225.8354 W m⁻² | 45.4344 W m⁻² | Computed 1980–2015 Welford stats (Task G3) |
+| `tcwv` | 17.0782 kg m⁻² | 16.5956 kg m⁻² | Computed 1980–2015 Welford stats (Task G3) |
+| `sst` | 285.5980 K | 11.7613 K | Computed 1980–2015 Welford stats (Task G5) |
 
 ### 6.2 The Arithmetic of Lesson 1
 Aurora's built-in `msl` constants are calibrated to sea level ($\mu = 100,958\text{ Pa}$, $\sigma = 1,332\text{ Pa}$). Surface pressure over the Tibetan Plateau or Antarctic ice sheet reaches $\sim 52,000\text{ Pa}$.
@@ -161,8 +163,16 @@ Aurora's built-in `msl` constants are calibrated to sea level ($\mu = 100,958\te
 The −36.8 σ input destabilizes the attention blocks and is the confirmed trigger of 100% non-finite validation loss.
 
 ### 6.3 Requirements for Replacing Placeholder Normalisation
-The current `msl` values are marked **PLACEHOLDER**. Replacing them requires running `scripts/calc_norm_stats.py` over the full 1980–2015 training record.
-- **Area Weighting Caveat:** The replacement calculation must document whether it is area-weighted by $\cos(\text{lat})$ or unweighted. Unweighted means over-represent dry, high-latitude polar cells, dragging the global mean down (as seen in `tcwv`'s $18.30\text{ kg m}^{-2}$ vs the true global mean of $24\text{--}25\text{ kg m}^{-2}$).
+The historical placeholder values were replaced in Task G3 with parallel Welford population statistics over the full 1980–2015 training record at 1.0° native resolution (`configs/norm_stats_1980_2015.yaml`).
+
+### 6.4 SST Static Boundary Condition & The 30-Day Persistence Boundary
+Over a 6-hour forecast step, sea surface temperature is nearly constant. Over a **120-step (30-day) rollout**, however, SST is the dominant boundary forcing on tropical convection and the single field that encodes ENSO state (El Niño / La Niña / Neutral). Without an ocean surface boundary, atmospheric memory decorrelates in 10–15 days and forecast rollouts relax toward an ENSO-agnostic climatology.
+
+1. **Persisted Static Semantics:** Sea surface temperature enters the model as an initial-value static variable initialised from observed daily ERA5 SST at $t_0$ and held constant across all rollout steps ($t_0 \to t_{119}$). Because static variables in Aurora possess encoder patch embeddings (`surf_token_embeds.weights['sst']`) but **no decoder output heads**, SST cannot drift or be predicted autoregressively.
+2. **Scientific Horizon Limitation (~30 Days):** Persisting the initial SST anomaly through a sub-seasonal forecast matches operational S2S convention because oceanic anomalies decorrelate on monthly timescales. At a 30-day lead time this assumption is physically defensible; **beyond ~45 days simple persistence breaks down**. This is an explicit, stated boundary of every scientific claim this project makes.
+3. **Absence of Ocean Dynamics:** The model contains **no ocean dynamics, no mixed-layer thermodynamics, and no ocean-atmosphere coupling**.
+4. **Later-Campaign Refinement (Damped Persistence):** Relaxing SST anomalies toward climatology with lead time (damped persistence) is the logical subsequent refinement, deferred to a later campaign to establish an unconfounded baseline first.
+5. **Land Fill & Normalisation Safety:** ERA5 SST is undefined over land. Missing land cells are filled with the global zonal-mean SST for each latitude band, preserving physical continuity. Under population normalisation ($\mu = 285.5980\text{ K}$, $\sigma = 11.7613\text{ K}$), the worst-case land grid cell sits at $1.7452 \sigma$ (306.12 K), completely avoiding normalisation spikes or unphysical input cliffs.
 
 ---
 
@@ -224,8 +234,8 @@ The following areas are explicitly **out of scope** for the current architecture
 1. **Unclamped Rollout Backprop (Finding 3):** Autoregressive rollouts currently do not clamp predictions before feeding them back into inputs. Resolving this requires deliberate scientific modeling in a future campaign.
 2. **Physics Loss Parameter Unfreezing (Finding 5):** In physics-informed mode, the backbone is frozen, preventing decoder heads from learning moisture-budget gradients. Addressing this requires a human scientific decision on trainable parameter subsets.
 3. **Msl Output Head Unfreezing (Finding 6):** The `msl` prediction head remains calibrated to true MSL statistics.
-4. **Full vs. Small Aurora Decisions:** `model_type: "small"` is retained as the stable baseline. Scaling up to the 1.3B model requires resolving Lesson 6 memory constraints.
-5. **Computing Production Norm Stats:** Recomputing multi-year stats over CFS requires dedicated compute allocation and is handled separately.
+4. **Prognostic Ocean / SST Dynamics (Task G5 Limitation):** Sea surface temperature is treated as an initial-value persisted static boundary condition held fixed across each forecast rollout. Simulating dynamic ocean response, mixed layer thermodynamics, ocean-atmosphere coupling, or damped-persistence relaxation is explicitly out of scope for this baseline campaign.
+5. **Damped-Persistence SST:** Relaxing the SST anomaly toward climatology with lead time is deferred to a later-campaign comparison; simple persistence is implemented first.
 
 ---
 

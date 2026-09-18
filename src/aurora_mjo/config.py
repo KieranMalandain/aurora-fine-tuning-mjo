@@ -121,6 +121,7 @@ class DataConfig(BaseConfigModel):
     use_dummy: bool = False
     root: str
     slt_path: str
+    sst_dir: str = "data/static/sst"
     dummy: DummyDataConfig = Field(default_factory=DummyDataConfig)
     real: RealDataConfig = Field(default_factory=RealDataConfig)
     batch_size: int = 1
@@ -162,6 +163,9 @@ class ModelConfig(BaseConfigModel):
     gradient_checkpointing: bool = False
     surface_variables: list[str] = Field(
         default_factory=lambda: ["2t", "10u", "10v", "msl", "ttr", "tcwv"]
+    )
+    static_variables: list[str] = Field(
+        default_factory=lambda: ["lsm", "z", "slt", "sst"]
     )
     norm_stats: dict[str, NormStatConfig]
     freeze_backbone: bool = True

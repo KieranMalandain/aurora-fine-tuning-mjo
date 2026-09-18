@@ -44,6 +44,10 @@ surface:
     mean: 18.279
     std: 16.3142
     n: 3408220800
+  sst:
+    mean: 285.5980
+    std: 11.7613
+    n: 71020800
 atmos:
   z:
     50:
@@ -329,6 +333,9 @@ norm_stats:
   tcwv:
     mean: 18.279
     std: 16.3142
+  sst:
+    mean: 285.5980
+    std: 11.7613
   z_50:
     mean: 199345.9861
     std: 5886.3716

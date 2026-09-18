@@ -269,7 +269,8 @@ If only (3) is available, G5 should be **deferred** rather than done badly, and
 J7 runs with the `AMBER` caveat in its result file. A bad ocean is worse than a
 documented absence of one.
 
-**ANSWER (human, YYYY-MM-DD):**
+**ANSWER (G5, 2026-09-17):**
+Option 1 implemented: daily 00:00 UTC ERA5 sea surface temperature (`sst`, units K) sourced directly from the Copernicus Climate Data Store (CDS, `reanalysis-era5-single-levels`). Automated ingestion script in `scripts/fetch_sst.py` downloads native 0.25° NetCDF, regrids via area-preserving bilinear/cell-mean to the G1 1.0° cell-centred grid (180×360, latitudes 89.5 down to -89.5 descending, longitudes 0.5 to 359.5), fills undefined land cells with zonal-mean SST (preserving physical range; worst land-point is 1.7452 σ), and compresses to NetCDF4. Files are stored at `data/static/sst/sst_1deg_<year>.nc`. Provenance, CDS terms of use/license, retrieval script, and exact SHA256 checksums are committed in `data/static/sst/README.md`.
 
 ---
 

@@ -34,6 +34,10 @@ from torch import nn
 # newly added and its embedding weights were randomly initialized  - those
 # must remain trainable.
 _AURORA_DEFAULT_SURF_VARS: frozenset[str] = frozenset({"2t", "10u", "10v", "msl"})
+# Aurora's built-in default static variables (from Aurora.__init__ signature).
+# Any variable in static_variables that is NOT here was newly added (e.g. 'sst')
+# and its embedding weights must remain trainable.
+_AURORA_DEFAULT_STATIC_VARS: frozenset[str] = frozenset({"lsm", "z", "slt"})
 
 
 # ---------------------------------------------------------------------------
@@ -262,6 +266,7 @@ def freeze_backbone(
     backbone: AuroraPretrained | AuroraSmallPretrained,
     new_surf_vars: tuple[str, ...],
     use_lora: bool,
+    static_vars: tuple[str, ...] = ("lsm", "z", "slt", "sst"),
 ) -> None:
     """Freeze the Aurora backbone except for LoRA adapters and new-variable embeddings.
 
@@ -272,10 +277,13 @@ def freeze_backbone(
        ``use_lora=True``.  These are identified by their containing module
        type (:class:`aurora.model.lora.LoRA` / ``LoRARollout``), not by name,
        to avoid any accidental matches.
-    3. Unfreeze the patch-embedding weights of *newly injected* surface
-       variables (i.e. any variable in ``new_surf_vars`` that is not among
-       Aurora's built-in defaults).  These weights were randomly initialized
+    3. Unfreeze the patch-embedding weights of *newly injected* surface and static
+       variables (i.e. any variable in ``new_surf_vars`` or ``static_vars`` that is
+       not among Aurora's built-in defaults).  These weights were randomly initialized
        on construction because the pretrained checkpoint has no entry for them.
+       Note: Static variables share ``surf_token_embeds`` with surface variables.
+    4. Unfreeze the decoder heads of *newly injected* surface variables. Static
+       variables do NOT have decoder heads.
 
     Args:
         backbone: The Aurora model instance.
@@ -283,6 +291,8 @@ def freeze_backbone(
             Aurora, as read from ``config['surface_variables']``.
         use_lora: Whether LoRA adapters are inserted (i.e.
             ``config['use_lora']``).
+        static_vars: The full tuple of static variable names passed to
+            Aurora, as read from ``config['static_variables']``.
     """
     # --- Step 1: blanket freeze ---
     for param in backbone.parameters():
@@ -296,7 +306,12 @@ def freeze_backbone(
                     param.requires_grad_(True)
 
     # --- Step 3: unfreeze new-variable patch embeddings ---
-    injected_vars = [v for v in new_surf_vars if v not in _AURORA_DEFAULT_SURF_VARS]
+    # Static and surface variables share surf_token_embeds (LevelPatchEmbed).
+    # Newly added surface variables AND static variables (such as 'sst') have
+    # randomly initialized embedding weights that must be trained.
+    injected_surf_vars = [v for v in new_surf_vars if v not in _AURORA_DEFAULT_SURF_VARS]
+    injected_static_vars = [v for v in static_vars if v not in _AURORA_DEFAULT_STATIC_VARS]
+    injected_vars = injected_surf_vars + injected_static_vars
     if injected_vars:
         surf_embed = backbone.encoder.surf_token_embeds
         for var in injected_vars:
@@ -308,19 +323,12 @@ def freeze_backbone(
                     "surf_token_embeds.weights; skipping unfreeze."
                 )
 
-    # --- Step 4 (BUG FIX): unfreeze DECODER heads of injected variables ---
-    # The decoder's per-variable output heads (backbone.decoder.surf_heads)
-    # for ttr/tcwv are also newly created and randomly initialized  - the
-    # pretrained checkpoint has no entry for them (they appeared as the
-    # "missing keys" in the job-52565795 resume crash). The old code left
-    # them FROZEN at random init, so the model could never learn to predict
-    # ttr/tcwv: their grid-loss contribution was a large irreducible floor
-    # (a major part of the val loss ~1.8e4). They must train alongside the
-    # new encoder embeddings.
-    if injected_vars:
+    # --- Step 4 (BUG FIX): unfreeze DECODER heads of injected surface variables ---
+    # Note: Static variables do NOT have decoder heads (only surf_vars do).
+    if injected_surf_vars:
         surf_heads = getattr(backbone.decoder, "surf_heads", None)
         if surf_heads is not None:
-            for var in injected_vars:
+            for var in injected_surf_vars:
                 if var in surf_heads:
                     for p in surf_heads[var].parameters():
                         p.requires_grad_(True)
@@ -421,19 +429,22 @@ def load_model(config: dict, norm_stats: dict | None = None) -> AuroraMJO:
     print(f"Initializing Aurora model. Type: {config['model_type']}")
 
     extended_surf_vars = tuple(config["surface_variables"])
+    static_vars = tuple(config.get("static_variables", ("lsm", "z", "slt")))
     model_class = AuroraPretrained if config["model_type"] == "full" else AuroraSmallPretrained
 
-    # Construct surf_stats dict for Aurora constructor to avoid global dict mutation
+    # Construct surf_stats dict for Aurora constructor to avoid global dict mutation.
+    # Note: Aurora uses surf_stats to normalise both surf_vars and static_vars.
     surf_stats: dict[str, tuple[float, float]] = {}
     if norm_stats:
         for var_name, stats in norm_stats.items():
-            if var_name in extended_surf_vars:
+            if var_name in extended_surf_vars or var_name in static_vars:
                 surf_stats[var_name] = (float(stats["mean"]), float(stats["std"]))
                 m, s = stats["mean"], stats["std"]
                 print(f"   - {var_name} (surf_stats): mean={m:.4f}, std={s:.4f}")
 
     backbone = model_class(
         surf_vars=extended_surf_vars,
+        static_vars=static_vars,
         use_lora=config["use_lora"],
         lora_mode=config.get("lora_mode", "single"),
         surf_stats=surf_stats or None,
@@ -443,14 +454,15 @@ def load_model(config: dict, norm_stats: dict | None = None) -> AuroraMJO:
     backbone.load_checkpoint(strict=False)
 
     # Note on normalisation injection:
-    # Surface variables are normalised via Aurora's native `surf_stats` constructor hook above,
-    # preventing process-global mutation of `aurora.normalisation.locations` / `scales`.
+    # Surface variables and static variables are normalised via Aurora's native
+    # `surf_stats` constructor hook above, preventing process-global mutation
+    # of `aurora.normalisation.locations` / `scales`.
     # Aurora exposes no equivalent constructor hook for atmospheric variables (which are
     # normalised via module-level `locations`/`scales`). If any atmospheric variables are
     # passed in norm_stats (e.g. "z_50"), global mutation is unavoidable and applied here.
     if norm_stats:
         for var_name, stats in norm_stats.items():
-            if var_name not in extended_surf_vars:
+            if var_name not in extended_surf_vars and var_name not in static_vars:
                 locations[var_name] = float(stats["mean"])
                 scales[var_name] = float(stats["std"])
                 m, s = stats["mean"], stats["std"]
@@ -478,6 +490,7 @@ def load_model(config: dict, norm_stats: dict | None = None) -> AuroraMJO:
             backbone=backbone,
             new_surf_vars=tuple(config["surface_variables"]),
             use_lora=config["use_lora"],
+            static_vars=static_vars,
         )
     else:
         print("WARNING: freeze_backbone=False  - full backbone will be trained.")

@@ -26,6 +26,7 @@ data:
   use_dummy: false
   root: /global/cfs/cdirs/m4946/xiaoming/zm4946.MachLearn/PrcsPrep/prcs.ERA5/prcs.ERA5.Remap/Results
   slt_path: data/static/slt_1deg.nc
+  sst_dir: data/static/sst
   dummy:
     surface_files: []
     pressure_files: []
@@ -45,12 +46,14 @@ model:
   lora_mode: "single"
   gradient_checkpointing: false   # v3: OFF — triggers IMA (handoff §2)
   surface_variables: ["2t", "10u", "10v", "msl", "ttr", "tcwv"]
+  static_variables: ["lsm", "z", "slt", "sst"]
   norm_stats:
     # True normalisation statistics computed over 1980–2015 at native 1° via Welford accumulation.
     # See configs/norm_stats_1980_2015.yaml for full dataset provenance and 13-level atmospheric stats.
     msl:  { mean: 96668.7494, std: 9504.4086 }
     ttr:  { mean: -226.0305, std: 49.2100 }
     tcwv: { mean: 18.2790,   std: 16.3142 }
+    sst:  { mean: 285.5980,  std: 11.7613 }
   mjo_head:
     enabled: false
 
