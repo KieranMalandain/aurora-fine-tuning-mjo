@@ -16,96 +16,105 @@ Therefore, evaluation must include explicit MJO phase-space metrics, not only gr
 
 Use chronological splits only.
 
-Proposed default:
-- Train: 1980–2015
-- Validation: 2016–2019
-- Test: 2020–2023
+- Train: 1980–2015 (36 years, 13,149 days)
+- Validation: 2016–2019 (4 years, 1,461 days)
+- Test: 2020–2023 (4 years, quarantined; not processed or evaluated in this campaign)
 
 These years are confirmed as the defaults used in `compute_rmm.py`.
-Customize via the `TRAIN_YEARS`, `VAL_YEARS`, `TEST_YEARS` constants in that script.
+Customize via the `TRAIN_YEARS`, `VAL_YEARS`, `ACTIVE_YEARS` constants in that script.
 
 ## Normalization Rules
 
-- Compute normalization statistics using training years only.
+- Compute normalization statistics using training years only (1980–2015).
 - Do not use validation or test years to compute train-time statistics.
-- If climatology/anomaly references are used for RMM calculation, define them using training-period references only unless the scientific protocol requires another standard.
+- Climatological references and EOF bases are derived exclusively using training-period references.
 
-## RMM Targets
+---
 
-The repository intends to evaluate forecasts in RMM space using fields such as:
-- OLR
-- U850
-- U200
+## RMM Targets & Pipeline Specification
 
-The evaluation pipeline should:
-1. compute anomalies
-2. project anomalies onto the chosen EOF basis
-3. derive RMM1 and RMM2
-4. compute amplitude and phase
+> [!IMPORTANT]
+> **Historical Correction Note (Task J1, 2026-09-18):**
+> Prior versions of this specification and `compute_rmm.py` specified a 3-element combined scalar vector `[olr, u850, u200]`, averaging over both latitude and longitude (`00_CONTEXT.md` R3). Because the zonal structure is what makes the MJO an eastward-propagating phenomenon, collapsing longitude destroyed all propagation information, rendering phase angles meaningless and RMM uncalibrated.
+> On 2026-09-18 (Task J1), this specification and `aurora_mjo.rmm` were rebuilt to strictly implement Wheeler & Hendon (2004) per `02_SCIENTIFIC_CONTRACT.md` §6, retaining all 360 longitudes.
 
-**Implemented in `scripts/compute_rmm.py` (2026-04-13):**
-- **Protocol:** Wheeler & Hendon (2004) methodology.
-- **Variables:** OLR (`mtnlwrf`), U850, U200 — tropical mean over 15°S–15°N.
-- **Seasonal-cycle removal:** Day-of-year (DOY) climatological mean computed on the training split (1980–2015); subtracted from all splits.
-- **Normalization:** Each anomaly series is divided by its training-period standard deviation before EOF computation.
-- **EOF basis:** Computed from the covariance matrix of the 3-element combined normalized anomaly vector, using only training-split data. The top two eigenvectors (EOF1, EOF2) define the RMM basis.
-- **Projection:** Validation and test anomalies projected onto the frozen training-period EOF basis.
-- **Outputs:** `data/rmm_basis.npz` (frozen basis), `data/rmm_targets.nc` (per-day RMM1, RMM2, amplitude, phase, split label).
+### The Wheeler & Hendon (2004) Procedure
+
+1. **Input Fields**:
+   - OLR: Top-of-atmosphere net longwave flux. Convention: `OLR = -mtnlwrf` (magnitude of outgoing longwave radiation, since `mtnlwrf` is net downward flux).
+   - Zonal wind at 850 hPa (`u850`).
+   - Zonal wind at 200 hPa (`u200`).
+   - Daily means from 6-hourly reanalysis fields.
+
+2. **Meridional Averaging**:
+   - Average over the equatorial band [15°S, 15°N] using a **simple unweighted meridional mean** to match Wheeler & Hendon (2004).
+   - Retain full zonal structure: output has shape `(time, longitude)` where $N_\lambda = 360$ at 1° regular resolution. No scalar collapse across longitude.
+
+3. **Seasonal Cycle Removal**:
+   - Annual cycle defined as the **mean plus the first three harmonics** of the annual cycle ($T_0 = 365.25$ days), fitted per longitude on the **training period only (1980–2015)**.
+   - Raw day-of-year means are retired (noisy at 36 samples/day).
+
+4. **Interannual (ENSO) Removal — 120-Day Mean under Convention (A)**:
+   - Subtract the mean of the previous 120 days at each longitude (`02_SCIENTIFIC_CONTRACT.md` §6.2).
+   - **Convention (A)**: For forecasts initialised at $t_0$, the 120-day mean is computed strictly from observed data ending at $t_0$ ($[t_0 - 120\text{d}, t_0]$) and held fixed across all forecast leads $\tau$. For verification observations, the same $t_0$-fixed observed mean is applied, keeping forecast and observation on an identical footing.
+   - Using any data after the forecast valid time is strictly forbidden as data leakage.
+
+5. **Field Normalisation**:
+   - Divide each field by its **zonally averaged temporal standard deviation** ($\bar{\sigma}$) derived exclusively from the training period (one scalar per field).
+
+6. **Combined Vector Construction**:
+   - For each day, concatenate normalised anomalies into $a(t) \in \mathbb{R}^{3 \cdot N_\lambda} = \mathbb{R}^{1080}$.
+   - Training matrix $X_{\text{train}}$ has shape $(T_{\text{train}}, 1080)$ where $T_{\text{train}} = 13,149$ days.
+
+7. **EOF Computation by SVD**:
+   - Decompose $X_{\text{train}}$ via Singular Value Decomposition: $X_{\text{train}} = U \Sigma V^T$.
+   - EOF1 and EOF2 are the first two right singular vectors (rows of $V^T$).
+   - **No $1080 \times 1080$ covariance matrix is formed.**
+
+8. **PC Normalisation to Unit Variance**:
+   - Divide raw PC projections by their training-period standard deviations:
+     $\text{RMM1} = (X \cdot \text{EOF1}) / \sigma_{\text{PC1}}$, $\text{RMM2} = (X \cdot \text{EOF2}) / \sigma_{\text{PC2}}$.
+   - Guarantees $\text{Var}(\text{RMM1}) = 1.0$ and $\text{Var}(\text{RMM2}) = 1.0$ on the training set, calibrating the $A > 1$ threshold.
+
+9. **Frozen Sign and Order Transform**:
+   - A $2 \times 2$ orthogonal transform matrix is stored in `data/rmm_basis.npz` (defaults to $I_2$ in J1, anchored to the Bureau of Meteorology reference in J2).
+
+10. **Quarantine Contract**:
+    - `data/rmm_targets.nc` contains daily RMM1, RMM2, amplitude, phase, and split label covering **1980–2019 only**.
+    - Test years (2020–2023) are not processed.
+
+---
 
 ## Primary Metrics
 
-- bivariate correlation coefficient vs lead time
-- RMSE of RMM1 and RMM2 vs lead time
-- amplitude error vs lead time
-- phase error vs lead time
+- **Bivariate Anomaly Correlation Coefficient (ACC)** vs lead time $\tau$:
+  $$\text{ACC}(\tau) = \frac{\sum_t [R_1^f(t, \tau) R_1^o(t, \tau) + R_2^f(t, \tau) R_2^o(t, \tau)]}{\sqrt{\sum_t [(R_1^f)^2 + (R_2^f)^2] \sum_t [(R_1^o)^2 + (R_2^o)^2]}}$$
+- **RMSE of RMM1 and RMM2** vs lead time.
+- **Amplitude error** vs lead time: $\mathbb{E}[A_{\text{fc}} - A_{\text{ob}}]$.
+- **Phase error** in degrees vs lead time.
 
-## Secondary Metrics
+## Secondary Metrics & Diagnostics
 
-- skill for active MJO cases only
-- skill by MJO phase
-- skill by season
-- skill across Maritime Continent crossing cases
-- gridded losses for selected fields
+- Skill conditional on **Active MJO** cases ($A(t_0) > 1.0$).
+- Skill stratified by **initial phase** (1–8).
+- Skill stratified by **season** (boreal winter NDJFMA vs boreal summer MJJASO).
+- Skill stratified by **ENSO regime** (El Niño, La Niña, Neutral).
+- Eastward / westward spectral power ratio in Wheeler–Kiladis space (propagation gate).
+- Gridded prognostic variable losses ($L_{\text{grid}}$).
 
 ## Active MJO Definition
 
-Default:
-- active if amplitude > 1.0
-
-The default threshold of 1.0 is used in `compute_rmm.py` (reported in summary output
-and stored in `rmm_targets.nc` global attributes). No change from default.
+- Active MJO: Amplitude $A = \sqrt{\text{RMM1}^2 + \text{RMM2}^2} > 1.0$.
 
 ## Forecast Horizons
 
-Default evaluation should support:
-- short-range lead checks
-- medium rollout horizons
-- subseasonal horizons up to 30 days or longer
+- Daily leads $\tau \in [1, 30]$ days (steps $k \in [4, 120]$ at 6-hour stepping).
 
 ## Required Validation Outputs
 
-Each evaluation run should produce:
-- summary table by lead time
-- plots of skill vs lead time
-- phase-space diagnostics if available
-- metadata including checkpoint, config, years, variables, and commit hash if possible
-
-## Pitfalls to Avoid
-
-- incorrect anomaly calculation
-- mixing train and test climatology
-- comparing incompatible RMM definitions
-- claiming skill based only on selected events
-- relying only on qualitative OLR maps
-
-## Evaluation Pipeline & RMM Protocol
-
-- **`compute_rmm.py` Status:** **IMPLEMENTED** (2026-04-13). Generates `data/rmm_basis.npz` and `data/rmm_targets.nc`. Smoke-test available; full run requires NERSC access.
-- **RMM Implementation Rules:** 
-  - Must compute Empirical Orthogonal Functions (EOFs) for OLR, U850, and U200.
-  - **CRITICAL:** EOFs and climatological means must be computed using *only* the training split (e.g., 1980–2015) to prevent data leakage into the validation/test sets.
-- **Benchmark Protocol:** Mirror the Wheeler & Hendon (2004) methodology. 
-- **Target Metrics:** 
-  - Bivariate Anomaly Correlation Coefficient (COR/ACC) for RMM1 and RMM2 at lead times 1 through 30 days. Target is ACC > 0.5 at day 30.
-  - Phase error and Amplitude error.
-  - Skill conditional on "Active MJO" events only (Initial Amplitude > 1.0).
+- Skill curves vs lead time (ACC, RMSE, amplitude error, phase error) plotted alongside 4 baselines:
+  1. Persistence
+  2. Damped persistence
+  3. Climatology ($RMM \equiv 0$)
+  4. Zero-shot Aurora
+- Summary table across lead times.
