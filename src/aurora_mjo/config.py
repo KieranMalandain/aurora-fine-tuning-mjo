@@ -208,9 +208,12 @@ class GridLossConfig(BaseConfigModel):
     """Latitude-weighted spatial grid loss."""
 
     enabled: bool = True
+    weight: float = 1.0
     tropics_bbox: list[int] = Field(default_factory=lambda: [-20, 20])
     tropics_weight: float = 1.0
     extratropics_weight: float = 0.1
+    level_weighting: str = "pressure_delta"
+    variable_weights: dict[str, float] | None = None
 
 
 class SpectralLossConfig(BaseConfigModel):

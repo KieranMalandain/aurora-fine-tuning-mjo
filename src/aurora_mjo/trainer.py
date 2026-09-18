@@ -362,14 +362,17 @@ class Trainer:
         loss_cfg = cfg.get("loss", {})
 
         grid_cfg = loss_cfg.get("grid", {})
-        lat_coords = torch.linspace(90, -90, 720)
+        lat_coords = torch.linspace(89.5, -89.5, 180)
         self.grid_loss = TropicalWeightedL1Loss(
             lat_coords=lat_coords,
             tropics_bbox=grid_cfg.get("tropics_bbox", [-20, 20]),
             tropics_weight=grid_cfg.get("tropics_weight", 1.0),
             extratropics_weight=grid_cfg.get("extratropics_weight", 0.1),
+            level_weighting=grid_cfg.get("level_weighting", "pressure_delta"),
+            variable_weights=grid_cfg.get("variable_weights", None),
         ).to(device)
         self.use_grid_loss = grid_cfg.get("enabled", True)
+        self.grid_weight = float(grid_cfg.get("weight", 1.0))
 
         spec_cfg = loss_cfg.get("spectral", {})
         self.spectral_loss = (
@@ -678,7 +681,8 @@ class Trainer:
         }
 
         if self.use_grid_loss:
-            var_losses = []
+            grid_var_losses = {}
+            weighted_var_losses = []
             for attr in ("surf_vars", "atmos_vars"):
                 if hasattr(pred_batch, attr):
                     for var_name, pred_t in getattr(pred_batch, attr).items():
@@ -686,9 +690,33 @@ class Trainer:
                             tgt_t = target_dict[var_name].to(self.device).float()
                             p = pred_t.to(self.device).float()
                             p, tgt_t = _align_shapes(p, tgt_t)
-                            var_losses.append(self.grid_loss(p, tgt_t))
-            if var_losses:
-                out["grid"] = sum(var_losses) / len(var_losses)
+                            v_loss = self.grid_loss(p, tgt_t, var_name=var_name)
+                            w_v = self.grid_loss.get_var_weight(var_name)
+                            grid_var_losses[var_name] = v_loss
+                            weighted_var_losses.append(w_v * v_loss)
+            if weighted_var_losses:
+                out["grid"] = self.grid_weight * sum(weighted_var_losses)
+
+            # Emit loss/grid/<var> for all eleven variables every logged step (H1 Step 4)
+            self._emit_step_count = getattr(self, "_emit_step_count", 0) + 1
+            if (
+                self._emit_step_count % self.log_every == 0
+                or self._emit_step_count == 1
+            ) and self.is_main:
+                var_loss_str = ", ".join(
+                    f"{k}={v.detach().item():.4f}" for k, v in grid_var_losses.items()
+                )
+                log.info(f"loss/grid: {var_loss_str}")
+                if hasattr(self, "metrics") and self.metrics is not None:
+                    self.metrics.log(
+                        {
+                            "step": self.global_step,
+                            **{
+                                f"loss/grid/{k}": float(v.detach().item())
+                                for k, v in grid_var_losses.items()
+                            },
+                        }
+                    )
 
         if self.spectral_loss is not None and self.spectral_weight > 0:
             pred_t, tgt_t = _extract_batch_outputs(pred_batch, target_dict, self.device)
