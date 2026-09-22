@@ -307,3 +307,42 @@ def test_saved_basis_and_targets_contract():
     assert 2020 not in years and 2021 not in years and 2022 not in years and 2023 not in years
     assert int(np.sum(ds.split.values == "train")) == 13149
     assert int(np.sum(ds.split.values == "val")) == 1461
+
+
+def test_rmm_bom_reproduction_gate_2016_2019():
+    """J2 Gate: verify frozen RMM basis reproduces official BoM index to r > 0.95 over 2016–2019."""
+    ref_path = Path("data/reference/rmm_bom.csv")
+    targets_path = Path("data/rmm_targets.nc")
+
+    if not ref_path.exists() or not targets_path.exists():
+        pytest.skip("data/reference/rmm_bom.csv or data/rmm_targets.nc missing on disk")
+
+    # Load BoM reference series (committed)
+    df_bom = pd.read_csv(ref_path)
+    df_bom["date"] = pd.to_datetime(df_bom["date"])
+    df_bom = df_bom.set_index("date").loc["2016-01-01":"2019-12-31"]
+
+    # Load targets series
+    ds = xr.open_dataset(targets_path)
+    val = ds.sel(time=slice("2016-01-01", "2019-12-31"))
+
+    # Assert exactly 1461 matching days
+    assert len(df_bom) == 1461, f"Expected 1461 BoM days, got {len(df_bom)}"
+    assert len(val.time) == 1461, f"Expected 1461 target days, got {len(val.time)}"
+
+    our1 = np.asarray(val.rmm1.values, dtype=np.float64)
+    our2 = np.asarray(val.rmm2.values, dtype=np.float64)
+    bom1 = np.asarray(df_bom["rmm1"].values, dtype=np.float64)
+    bom2 = np.asarray(df_bom["rmm2"].values, dtype=np.float64)
+
+    r1 = float(np.corrcoef(our1, bom1)[0, 1])
+    r2 = float(np.corrcoef(our2, bom2)[0, 1])
+    biv = float(
+        np.sum(our1 * bom1 + our2 * bom2)
+        / np.sqrt(np.sum(our1**2 + our2**2) * np.sum(bom1**2 + bom2**2))
+    )
+
+    # J2 Primary Gate Assertions
+    assert r1 > 0.95, f"RMM1 correlation against BoM failed gate threshold: r={r1:.4f} <= 0.95"
+    assert r2 > 0.95, f"RMM2 correlation against BoM failed gate threshold: r={r2:.4f} <= 0.95"
+    assert biv > 0.95, f"Bivariate ACC against BoM failed gate threshold: r={biv:.4f} <= 0.95"

@@ -27,6 +27,12 @@ N_LON = 360
 # Wheeler-Hendon phase lookup table
 _WH_PHASE_EDGES = np.array([0, 45, 90, 135, 180, 225, 270, 315, 360])
 
+# Frozen sign/order transform matrix anchored to official BoM Wheeler & Hendon (2004) RMM series.
+# SO(2) rotation theta = 215.7521 deg (3.765584 rad) aligning ERA5 1° basis to WH2004 convention.
+FROZEN_TRANSFORM_MATRIX: np.ndarray = np.array(
+    [[-0.811553, 0.5842788], [-0.5842788, -0.811553]], dtype=np.float32
+)
+
 
 def tropical_mean(da: xr.DataArray) -> xr.DataArray:
     """Unweighted meridional mean over [LAT_S, LAT_N] retaining zonal structure.
@@ -249,7 +255,7 @@ def project_onto_eofs(
     X : shape (T, 1080)
     eof1, eof2 : shape (1080,)
     pc1_std, pc2_std : training standard deviations
-    transform_matrix : shape (2, 2), frozen sign/order transform (default: I)
+    transform_matrix : shape (2, 2), frozen sign/order transform (default: FROZEN_TRANSFORM_MATRIX)
 
     Returns
     -------
@@ -259,7 +265,7 @@ def project_onto_eofs(
     pc2 = (X @ eof2) / (pc2_std + 1e-12)
 
     if transform_matrix is None:
-        transform_matrix = np.eye(2, dtype=np.float32)
+        transform_matrix = FROZEN_TRANSFORM_MATRIX
 
     pcs = np.column_stack([pc1, pc2])  # (T, 2)
     rmm = pcs @ transform_matrix.T
