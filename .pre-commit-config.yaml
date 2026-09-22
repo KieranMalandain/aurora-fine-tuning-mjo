@@ -2,7 +2,7 @@
 # because pre-commit sees only staged files.
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.6.9
+    rev: v0.16.6
     hooks:
       - id: ruff
         # Pre-existing violations in legacy code (scripts/ and dataset.py) ignored until A3

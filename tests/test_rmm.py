@@ -51,14 +51,14 @@ def test_tropical_mean_retains_longitude_360():
     result = tropical_mean(da)
 
     # Must retain longitude dimension of 360, shape (time, lon)
-    assert (
-        "lon" in result.dims or "longitude" in result.dims
-    ), f"Tropical mean must retain longitude dimension, got dims {result.dims}"
+    assert "lon" in result.dims or "longitude" in result.dims, (
+        f"Tropical mean must retain longitude dimension, got dims {result.dims}"
+    )
     lon_dim = "lon" if "lon" in result.dims else "longitude"
     assert result.sizes[lon_dim] == 360, f"Expected 360 longitudes, got {result.sizes.get(lon_dim)}"
-    assert (
-        result.ndim == 2
-    ), f"Expected 2D (time, lon), got {result.ndim}D with shape {result.shape}"
+    assert result.ndim == 2, (
+        f"Expected 2D (time, lon), got {result.ndim}D with shape {result.shape}"
+    )
 
 
 def test_tropical_mean_unweighted_meridional_average():

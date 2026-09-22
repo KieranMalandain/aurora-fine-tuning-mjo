@@ -396,9 +396,9 @@ def test_validation_loss_unchanged_with_no_grad_at_k1() -> None:
 
     val_no_grad = losses_no_grad["total"].item()
     val_with_grad = losses_with_grad["total"].item()
-    assert (
-        abs(val_no_grad - val_with_grad) < 1e-6
-    ), f"Loss mismatch at k=1: no_grad={val_no_grad} vs with_grad={val_with_grad}"
+    assert abs(val_no_grad - val_with_grad) < 1e-6, (
+        f"Loss mismatch at k=1: no_grad={val_no_grad} vs with_grad={val_with_grad}"
+    )
 
 
 def test_rollout_clamp_vendor_replacement() -> None:
@@ -411,6 +411,6 @@ def test_rollout_clamp_vendor_replacement() -> None:
 
     # 2. Non-vendor physical guards are strictly retained
     expected_retained = {"msl", "2t", "10u", "10v", "ttr"}
-    assert (
-        set(_ROLLOUT_CLAMP.keys()) == expected_retained
-    ), f"Expected retained clamp variables {expected_retained}, got {set(_ROLLOUT_CLAMP.keys())}"
+    assert set(_ROLLOUT_CLAMP.keys()) == expected_retained, (
+        f"Expected retained clamp variables {expected_retained}, got {set(_ROLLOUT_CLAMP.keys())}"
+    )
