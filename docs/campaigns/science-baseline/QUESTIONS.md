@@ -136,7 +136,8 @@ semantics. Never re-fetch silently. If licensing prevents committing it, store i
 under `/global/cfs/cdirs/m4946/…`-adjacent **project-owned** storage (never
 inside the read-only archive) and commit the retrieval script plus a checksum.
 
-**ANSWER (human, YYYY-MM-DD):**
+**ANSWER (J2, 2026-09-22):**
+Resolved per proposed default. Official Wheeler–Hendon (2004) RMM series retrieved from the Australian Bureau of Meteorology (`http://www.bom.gov.au/climate/mjo/graphics/rmm.74toRealtime.txt`) on 2026-09-22 via reproducible script `scripts/fetch_rmm_reference.py`. Parsed, cleaned of missing value sentinels (1.E36 / 999), and committed to `data/reference/rmm_bom.csv` (1,533,498 bytes, SHA256: `8501dc4dbec5159926e7f0304fec3d0c322c7b625b61b452f1fd4fd4746c92ac`). Provenance, Commonwealth of Australia copyright notice / fair dealing terms of use, retrieval metadata, and exact column semantics documented in `data/reference/README.md`.
 
 ---
 
