@@ -357,3 +357,13 @@ Comparing `configs/unified.yaml` directly against historical baseline fixtures c
 **Proposed default:** Update `test_b1_baseline_fixture_exact_round_trip` to validate that the B1 baseline fixtures round-trip through Pydantic `Config.model_validate(expected_dict).to_dict() == expected_dict` directly, and update `test_apply_overrides_locked_against_b1_fingerprint` to apply overrides to `baseline_fingerprint['config_baseline']`. This ensures `tests/fixtures/baseline/` remains an immutable historical benchmark while allowing `configs/unified.yaml` to evolve across the science campaign.
 
 **ANSWER (human, YYYY-MM-DD):**
+
+---
+
+## Q-24 — Evaluation harness dataloader capped by `training.max_val_batches: 200`
+
+**Raised by:** J4, 2026-09-22
+**Blocks:** Full $N = 292$ sample evaluation in J4 and all subsequent Phase K evaluation runs.
+**Proposed default:** In `scripts/evaluate_mjo.py:720`, override `cfg["training"]["max_val_batches"] = None` before calling `build_dataloader(cfg, split="val")`. Even better, construct a dedicated evaluation sampler/subset that selects only the 292 sample indices corresponding to the 5-day stride (`day_offset % 5 == 0`), which eliminates reading the 5,550 unneeded samples from disk and reduces evaluation time from ~3.8 hours to under 2 hours.
+
+**ANSWER (human, YYYY-MM-DD):**

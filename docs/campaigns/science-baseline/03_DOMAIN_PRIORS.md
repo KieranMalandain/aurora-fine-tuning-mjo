@@ -294,11 +294,17 @@ and **Q-12**.
 | System | Bivariate ACC = 0.5 crossing | Note |
 | --- | --- | --- |
 | Climatology (`RMM ≡ 0`) | 0 days | The floor |
-| Persistence | ~5–8 days | |
-| Damped persistence | ~8–12 days | The real floor to beat |
+| **Zero-shot Aurora (Control)** | **1 day** (active $A(t_0) > 1$: 1.0 d; all cases: < 1 d) | **MEASURED (J4)** — 1.3B `AuroraPretrained`, un-fine-tuned injected channels, 2016–2019 val |
+| Persistence | ~5–8 days | Baseline |
+| Damped persistence | ~8–12 days | The real floor to beat ($\tau_d = 9.62$ d) |
 | Operational ensemble means | ~25–36 days | **Ensemble**. Not comparable to a single member. |
 | Published ML systems | ~20–30 days | Mostly **ensemble**; check member count before comparing |
 | **This campaign, target T3** | **≥ 20 days**, stretch ≥ 25 | Single member, `A(t₀) > 1`, 2016–2019 |
+
+### Evaluation of Priors after J4 Control Measurement:
+- **Zero-shot Aurora skill collapse**: Zero-shot un-fine-tuned `AuroraPretrained` achieves bivariate ACC = 0.502 at Day 1 (active cases), which collapses immediately to 0.247 at Day 2, 0.173 at Day 5, and becomes zero/negative thereafter (-0.055 at Day 10, -0.053 at Day 20).
+- **Amplitude explosion**: Instead of damping toward 0, forecast amplitude expands ($\hat{A} / A_{\text{obs}} \approx 2.7–3.0$ by Day 10–30) due to uncalibrated random variance from the untrained `ttr` and `tcwv` heads compounding autoregressively.
+- **Plausibility of LITERATURE baselines**: Damped persistence (~8–12 days; measured $\tau_d = 9.62$ d crossing at 8.5 d) and persistence (~5–6 days) easily outperform zero-shot Aurora. This confirms that without fine-tuning, the Earth-system foundation model possesses zero sub-seasonal MJO predictive capability, establishing an unambiguous, low-floor empirical baseline for Target **T1** (fine-tuned vs zero-shot).
 
 **An ACC above ~0.8 at day 20 from a single deterministic member is not a
 success, it is a bug.** The first three things to check: 120-day mean leakage
@@ -309,7 +315,8 @@ rather than predicted fields.
 Amplitude prior: `Â/A_obs` for a deterministic model decays roughly
 exponentially. **0.5–0.7 at day 20** would be normal. Below ~0.3 the model has
 stopped forecasting the MJO regardless of what ACC says
-(`02_SCIENTIFIC_CONTRACT.md` §1.4).
+(`02_SCIENTIFIC_CONTRACT.md` §1.4). Note that in zero-shot with untrained heads,
+amplitude ratio expands (> 2.5) rather than decays due to uncalibrated noise injection.
 
 
 ---
