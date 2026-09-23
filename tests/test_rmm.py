@@ -34,7 +34,11 @@ from aurora_mjo.rmm.compute import (
     tropical_mean,
 )
 from aurora_mjo.rmm.evaluate import (
+    amplitude_ratio,
+    compute_baselines_for_cases,
+    compute_gridded_tropical_rmse,
     extract_rmm_from_fields,
+    fit_damped_persistence_timescale,
 )
 
 
@@ -346,3 +350,56 @@ def test_rmm_bom_reproduction_gate_2016_2019():
     assert r1 > 0.95, f"RMM1 correlation against BoM failed gate threshold: r={r1:.4f} <= 0.95"
     assert r2 > 0.95, f"RMM2 correlation against BoM failed gate threshold: r={r2:.4f} <= 0.95"
     assert biv > 0.95, f"Bivariate ACC against BoM failed gate threshold: r={biv:.4f} <= 0.95"
+
+
+def test_amplitude_ratio_metric():
+    """Verify amplitude_ratio calculates mean(amp_fc) / mean(amp_ob) (Target T4)."""
+    amp_ob = np.array([1.0, 2.0, 3.0])  # mean = 2.0
+    amp_fc = np.array([0.6, 1.2, 1.8])  # mean = 1.2 -> ratio = 0.6
+    ratio = amplitude_ratio(amp_fc, amp_ob)
+    assert np.isclose(ratio, 0.6)
+
+    # Empty array guard
+    assert np.isnan(amplitude_ratio(np.array([]), np.array([])))
+
+
+def test_compute_gridded_tropical_rmse():
+    """Verify gridded tropical RMSE computation over [15°S, 15°N]."""
+    lat = np.linspace(89.5, -89.5, 180)
+    fc = np.zeros((180, 360), dtype=np.float32)
+    ob = np.zeros((180, 360), dtype=np.float32)
+
+    # Inject an error inside the tropics
+    trop_mask = (lat >= LAT_S) & (lat <= LAT_N)
+    fc[trop_mask, :] = 2.0  # diff = 2.0 -> RMSE = 2.0
+    # Inject an error outside the tropics
+    fc[~trop_mask, :] = 100.0  # must be ignored
+
+    rmse = compute_gridded_tropical_rmse(fc, ob, lat)
+    assert np.isclose(rmse, 2.0)
+
+
+def test_fit_damped_persistence_and_baselines():
+    """Verify tau_d fitting on training targets and baseline generation."""
+    targets_path = Path("data/rmm_targets.nc")
+    if not targets_path.exists():
+        pytest.skip("data/rmm_targets.nc missing on disk")
+
+    ds = xr.open_dataset(targets_path)
+    tau_d = fit_damped_persistence_timescale(ds, train_years=(1980, 2015))
+    # Domain prior (03_DOMAIN_PRIORS.md §9): ~8–12 days
+    assert 8.0 <= tau_d <= 12.0, f"Expected tau_d in [8, 12] days, got {tau_d:.2f}"
+
+    # Test baseline computation on a small sample of dates
+    init_times = [datetime(2016, 1, 1), datetime(2016, 1, 6), datetime(2016, 1, 11)]
+    baselines = compute_baselines_for_cases(ds, init_times, tau_d=tau_d, max_lead_days=5)
+
+    assert "persistence" in baselines
+    assert "damped_persistence" in baselines
+    assert "climatology" in baselines
+
+    for b in ("persistence", "damped_persistence", "climatology"):
+        assert len(baselines[b]["leads"]) == 5
+        assert len(baselines[b]["acc"]) == 5
+        assert len(baselines[b]["rmse_combined"]) == 5
+        assert len(baselines[b]["amp_ratio"]) == 5

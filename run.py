@@ -136,6 +136,21 @@ def evaluate(
         "--out-dir",
         help="Directory to write evaluation outputs.",
     ),
+    init_stride_days: int = typer.Option(
+        5,
+        "--init-stride-days",
+        help="Initialisation sampling stride in days (default: 5).",
+    ),
+    max_lead_days: int = typer.Option(
+        30,
+        "--max-lead-days",
+        help="Maximum lead time in days (default: 30).",
+    ),
+    num_cases: int | None = typer.Option(
+        None,
+        "--num-cases",
+        help="Limit number of evaluated cases (e.g. 1 for shakedown).",
+    ),
     smoke_test: bool = typer.Option(
         False,
         "--smoke-test",
@@ -151,19 +166,19 @@ def evaluate(
         return
 
     ckpt_path: Path | None = None
-    if checkpoint == "latest":
+    if checkpoint.lower() in ("none", "untrained"):
+        ckpt_path = None
+    elif checkpoint == "latest":
         cfg = load_config(str(config), mode)
         save_dir = cfg.get("checkpointing", {}).get("save_dir", f"checkpoints/{mode}")
         ckpt_path = CheckpointManager.find_latest(save_dir)
         if ckpt_path is None:
             typer.echo(
                 f"No checkpoint found in save_dir '{save_dir}'. "
-                f"Run scripts/evaluate_mjo.py directly with an explicit checkpoint:\n"
-                f"  uv run python scripts/evaluate_mjo.py --config {config} --mode {mode} "
-                f"--checkpoint <path/to/checkpoint.pt>",
+                "Evaluating with initialized model weights "
+                "(pass --checkpoint <path> for explicit checkpoint).",
                 err=True,
             )
-            raise typer.Exit(code=1)
     else:
         ckpt_path = Path(checkpoint)
         if not ckpt_path.exists():
@@ -183,15 +198,22 @@ def evaluate(
         str(config),
         "--mode",
         mode,
-        "--checkpoint",
-        str(ckpt_path),
         "--targets",
         str(targets),
         "--basis",
         str(basis),
         "--out-dir",
         str(out_dir),
+        "--init-stride-days",
+        str(init_stride_days),
+        "--max-lead-days",
+        str(max_lead_days),
     ]
+    if ckpt_path is not None:
+        cmd.extend(["--checkpoint", str(ckpt_path)])
+    if num_cases is not None:
+        cmd.extend(["--num-cases", str(num_cases)])
+
     res = subprocess.run(cmd)
     if res.returncode != 0:
         raise typer.Exit(code=res.returncode)

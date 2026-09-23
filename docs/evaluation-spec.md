@@ -90,31 +90,96 @@ Customize via the `TRAIN_YEARS`, `VAL_YEARS`, `ACTIVE_YEARS` constants in that s
 - **Bivariate Anomaly Correlation Coefficient (ACC)** vs lead time $\tau$:
   $$\text{ACC}(\tau) = \frac{\sum_t [R_1^f(t, \tau) R_1^o(t, \tau) + R_2^f(t, \tau) R_2^o(t, \tau)]}{\sqrt{\sum_t [(R_1^f)^2 + (R_2^f)^2] \sum_t [(R_1^o)^2 + (R_2^o)^2]}}$$
 - **RMSE of RMM1 and RMM2** vs lead time.
-- **Amplitude error** vs lead time: $\mathbb{E}[A_{\text{fc}} - A_{\text{ob}}]$.
-- **Phase error** in degrees vs lead time.
+- **Combined RMSE**: $\text{RMSE}_{\text{comb}} = \sqrt{\frac{1}{2}(\text{RMSE}_1^2 + \text{RMSE}_2^2)}$.
+- **Mean Forecast Amplitude Ratio (Target T4, 02_SCIENTIFIC_CONTRACT.md §1.2 & §1.4)**:
+  $$\frac{\mathbb{E}[A_{\text{fc}}]}{\mathbb{E}[A_{\text{ob}}]}$$
+  (Primary amplitude fidelity check; target threshold $\ge 0.6$ at Day 20).
+- **Amplitude Error (Bias)**: $\mathbb{E}[A_{\text{fc}} - A_{\text{ob}}]$.
+- **Mean Absolute Phase Error**: $\mathbb{E}[|\theta_{\text{fc}} - \theta_{\text{ob}}|]$ in degrees.
 
 ## Secondary Metrics & Diagnostics
 
 - Skill conditional on **Active MJO** cases ($A(t_0) > 1.0$).
+- Gridded tropical RMSE for $ttr$ (OLR), $tcwv$, and $u850$ vs lead time on dual-axes with RMM ACC (`02_SCIENTIFIC_CONTRACT.md` §1.5).
 - Skill stratified by **initial phase** (1–8).
 - Skill stratified by **season** (boreal winter NDJFMA vs boreal summer MJJASO).
 - Skill stratified by **ENSO regime** (El Niño, La Niña, Neutral).
 - Eastward / westward spectral power ratio in Wheeler–Kiladis space (propagation gate).
-- Gridded prognostic variable losses ($L_{\text{grid}}$).
 
-## Active MJO Definition
+## Initialisation Sampling Protocol
 
-- Active MJO: Amplitude $A = \sqrt{\text{RMM1}^2 + \text{RMM2}^2} > 1.0$.
+- **Validation Split**: 2016–2019 (1,461 calendar days).
+- **Sampling Cadence**: Regular 5-day stride (`--init-stride-days 5`), yielding $N = 292$ total cases.
+- **Justification**: 5-day cadence matches the MJO decorrelation / phase advance timescale (~$37.5^\circ$), eliminating serial pseudoreplication between consecutive days while ensuring uniform coverage across all 4 years and 16 seasons. At G2's measured step time (221.4 ms/step), $292 \times 120$ steps costs **2.15 GPU-hours** on 1 A100 GPU.
+- **Active Conditioning**: Initial conditions with $A(t_0) > 1.0$ ($N \approx 175$ cases, ~60% active fraction). Both all-case and active-case curves are reported.
 
-## Forecast Horizons
+## Baselines Protocol (02_SCIENTIFIC_CONTRACT.md §6.4)
 
-- Daily leads $\tau \in [1, 30]$ days (steps $k \in [4, 120]$ at 6-hour stepping).
+All four baselines evaluated on identical initial conditions and lead times:
+1. **Persistence**: $\hat{RMM}(t_0 + \tau) = RMM(t_0)$.
+2. **Damped Persistence**: $\hat{RMM}(t_0 + \tau) = RMM(t_0) \cdot \exp(-\tau / \tau_d)$, with $\tau_d = 10.60$ days fitted strictly on 1980–2015 training targets (no leakage).
+3. **Climatology**: $\hat{RMM} \equiv 0$ (ACC = 0.0, RMSE = $\sqrt{2}$).
+4. **Zero-shot Aurora**: Unmodified `AuroraPretrained` (Task J4 control).
 
-## Required Validation Outputs
+## Output File Formats and JSON Schema
 
-- Skill curves vs lead time (ACC, RMSE, amplitude error, phase error) plotted alongside 4 baselines:
-  1. Persistence
-  2. Damped persistence
-  3. Climatology ($RMM \equiv 0$)
-  4. Zero-shot Aurora
-- Summary table across lead times.
+Each evaluation run produces:
+- `mjo_skill_by_lead.csv` and `active_mjo_skill_by_lead.csv`: Per-lead tables of all metrics.
+- `eval_results.json`: Machine-readable results and metadata.
+- Plots: `mjo_acc_vs_lead.png`, `mjo_rmse_vs_lead.png`, `mjo_amp_ratio_vs_lead.png`, `mjo_phase_err_vs_lead.png`, `mjo_gridded_rmse_vs_acc.png`.
+
+### `eval_results.json` Schema
+
+```json
+{
+  "metadata": {
+    "timestamp": "ISO-8601 UTC timestamp",
+    "git_commit": "SHA-1 commit hash",
+    "checkpoint": "path or 'untrained'",
+    "config": "path to config YAML",
+    "mode": "warmup | lora | rollout | physics",
+    "split": "val",
+    "max_lead_days": 30,
+    "init_stride_days": 5,
+    "tau_d_days": 10.6016,
+    "n_total_evaluated": 292,
+    "n_active_evaluated": 175,
+    "active_threshold": 1.0
+  },
+  "metrics": {
+    "all_cases": {
+      "leads": [1, 2, "...", 30],
+      "acc": ["..."],
+      "rmse_rmm1": ["..."],
+      "rmse_rmm2": ["..."],
+      "rmse_combined": ["..."],
+      "amp_err": ["..."],
+      "amp_ratio": ["..."],
+      "phase_err_deg": ["..."],
+      "gridded_rmse_ttr": ["..."],
+      "gridded_rmse_tcwv": ["..."],
+      "gridded_rmse_u850": ["..."],
+      "n_cases": ["..."]
+    },
+    "active_mjo": {
+      "leads": [1, 2, "...", 30],
+      "acc": ["..."],
+      "rmse_rmm1": ["..."],
+      "rmse_rmm2": ["..."],
+      "rmse_combined": ["..."],
+      "amp_err": ["..."],
+      "amp_ratio": ["..."],
+      "phase_err_deg": ["..."],
+      "gridded_rmse_ttr": ["..."],
+      "gridded_rmse_tcwv": ["..."],
+      "gridded_rmse_u850": ["..."],
+      "n_cases": ["..."]
+    }
+  },
+  "baselines": {
+    "persistence": { "leads": ["..."], "acc": ["..."], "rmse_combined": ["..."], "amp_ratio": ["..."], "phase_err_deg": ["..."] },
+    "damped_persistence": { "leads": ["..."], "acc": ["..."], "rmse_combined": ["..."], "amp_ratio": ["..."], "phase_err_deg": ["..."] },
+    "climatology": { "leads": ["..."], "acc": ["..."], "rmse_combined": ["..."], "amp_ratio": ["..."] }
+  }
+}
+```
